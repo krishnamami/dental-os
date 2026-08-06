@@ -140,6 +140,13 @@ class ContextBuilder:
                 header.get("missing_tooth_clause_triggered")
             ),
             coordination_of_benefits=_b(header.get("coordination_of_benefits")),
+            enrollment_start=(
+                header["enrollment_start"].isoformat()
+                if header.get("enrollment_start") else None
+            ),
+            waiting_period_basic_months=header.get("waiting_period_basic_months"),
+            waiting_period_major_months=header.get("waiting_period_major_months"),
+            waiting_period_implant_months=header.get("waiting_period_implant_months"),
             # Deliberately NOT _b() — None must survive as None. See the
             # field's comment in pred_context.EligibilityProfile.
             member_id_mismatch=header.get("member_id_mismatch"),

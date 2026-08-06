@@ -120,6 +120,13 @@ class EligibilityProfile:
     waiting_period_met: bool
     missing_tooth_clause_triggered: bool
     coordination_of_benefits: bool
+    # Enrollment + plan waiting periods. Carried on the context so
+    # waiting_period_resolver can compute months_enrolled without a
+    # query — RULE 5 means the resolver gets everything from the bundle.
+    enrollment_start: Optional[str] = None
+    waiting_period_basic_months: Optional[int] = None
+    waiting_period_major_months: Optional[int] = None
+    waiting_period_implant_months: Optional[int] = None
     # Tri-state on purpose. None means "no insurance card on file, so
     # the comparison could not be made" — which is NOT the same as
     # "the ids match". Only 10 of the 35 scenarios carry a card.

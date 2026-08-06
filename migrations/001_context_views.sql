@@ -72,6 +72,7 @@ SELECT
     pl.plan_type,
     pl.annual_maximum                            AS plan_annual_maximum,
     pl.deductible_individual,
+    pl.waiting_period_basic_months,
     pl.waiting_period_major_months,
     pl.waiting_period_implant_months,
     pl.implant_coverage                          AS plan_implant_coverage,
