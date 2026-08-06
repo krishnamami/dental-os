@@ -182,6 +182,13 @@ class PredContext:
     # ── Audit ────────────────────────────────────────────────────────
     audit_events: list = field(default_factory=list)
 
+    # ── Catalogue rules, attached by ContextEnricher ─────────────────
+    # Empty until enrich() runs. A persona reading this while empty is
+    # a wiring bug, not a data gap — the enricher is the ONLY thing
+    # that populates it (RULE 4), and personas never load rules
+    # themselves (RULE 5).
+    catalogue_rules: dict = field(default_factory=dict)
+
     # ── Convenience accessors ────────────────────────────────────────
     # Read-only derivations. A persona uses these instead of walking
     # the evidence list itself, so "where does bone_loss_mm come from"

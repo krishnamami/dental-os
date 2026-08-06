@@ -13,10 +13,20 @@ Two things enforce that here rather than leaving it to good intentions:
      UPDATE that slipped into a query string raises rather than
      committing.
 
-When dental-os grows its own tables (decision_outputs, persona_bundles,
-provider_feedback, appeal_packets — migrations/002) those writes need a
-SEPARATE pool and a separate helper. Do not relax the read-only flag
-here to make a write work; that is the guardrail doing its job.
+dental-os's own tables (decision_outputs, persona_bundles,
+provider_feedback, appeal_packets — migrations/002) live in a SEPARATE
+database, `dental_os`, reached through get_os_pool() and written through
+execute_os_with_tenant(). Do not relax the read-only flag here to make a
+write work; that is the guardrail doing its job — write to the other
+pool instead.
+
+    DATABASE_URL            -> dental      READ-ONLY   dental-simulator
+    DENTAL_OS_DATABASE_URL  -> dental_os   READ-WRITE  dental-os
+
+Both databases enforce RLS, so both helpers set app.tenant_id inside a
+transaction. That `is_local => true` scoping is not optional: outside a
+transaction the setting is discarded immediately and every subsequent
+read returns 0 rows with no error.
 """
 from __future__ import annotations
 
@@ -34,6 +44,7 @@ load_dotenv()
 DEFAULT_TENANT = "suwanee_smiles"
 
 _pool: Optional[asyncpg.Pool] = None
+_os_pool: Optional[asyncpg.Pool] = None
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -57,11 +68,71 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def get_os_pool() -> asyncpg.Pool:
+    """Pool for dental-os's OWN tables in the `dental_os` database.
+
+    This is the ONLY pool that may write. It is a different database on
+    the same RDS instance, so a dental-os write physically cannot touch
+    a dental-simulator table (RULE 15). The trade-off is that there is
+    no cross-database JOIN — join in Python on pred_request_id.
+    """
+    global _os_pool
+    if _os_pool is None:
+        dsn = os.environ.get("DENTAL_OS_DATABASE_URL")
+        if not dsn:
+            raise RuntimeError(
+                "DENTAL_OS_DATABASE_URL is not set. It points at the "
+                "`dental_os` database (dental-os's own tables), NOT at "
+                "`dental` (dental-simulator, read-only). Apply "
+                "migrations/002_dental_os_tables.sql if the database does "
+                "not exist yet."
+            )
+        if dsn == os.environ.get("DATABASE_URL"):
+            raise RuntimeError(
+                "DENTAL_OS_DATABASE_URL and DATABASE_URL point at the SAME "
+                "database. dental-os would then be writing into "
+                "dental-simulator, which RULE 15 forbids. The read pool "
+                "ends in /dental; the write pool ends in /dental_os."
+            )
+        _os_pool = await asyncpg.create_pool(
+            dsn=dsn,
+            min_size=1,
+            max_size=5,
+            command_timeout=30,
+        )
+    return _os_pool
+
+
+async def execute_os_with_tenant(
+    pool: asyncpg.Pool,
+    tenant_id: str,
+    query: str,
+    *args: Any,
+) -> list[dict]:
+    """Write (or read) dental-os's own tables under RLS tenant context.
+
+    Read-write by design — the counterpart to fetch_with_tenant. Use
+    RETURNING to get rows back. The transaction is mandatory for the
+    same reason as on the read side: is_local=true dies with it, and
+    the WITH CHECK clause on every policy would then reject the insert.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT set_config('app.tenant_id', $1, true)", tenant_id
+            )
+            rows = await conn.fetch(query, *args)
+    return [dict(r) for r in rows]
+
+
 async def close_pool() -> None:
-    global _pool
+    global _pool, _os_pool
     if _pool is not None:
         await _pool.close()
         _pool = None
+    if _os_pool is not None:
+        await _os_pool.close()
+        _os_pool = None
 
 
 async def fetch_with_tenant(

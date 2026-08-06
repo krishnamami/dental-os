@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from core.catalogue.context_enricher import ContextEnricher  # noqa: E402
 from core.context.context_builder import ContextBuilder  # noqa: E402
 from core.db.connection import close_pool, get_pool  # noqa: E402
 
@@ -150,6 +151,42 @@ async def main() -> int:
     row("audit_events", len(ctx.audit_events))
     for ev in ctx.audit_events[:3]:
         print(f"      {ev.get('occurred_at', '')[:19]}  {ev.get('event_type')}")
+
+    # ── Enrichment (Phase 2) ──────────────────────────────────────────
+    print("\nCatalogue enrichment")
+    row("catalogue_rules before", ctx.catalogue_rules or "{} (empty until enrich)")
+    ctx = await ContextEnricher(pool).enrich(ctx)
+    r = ctx.catalogue_rules
+    row("sections loaded", len([k for k in r if not k.startswith("_")]))
+    row("load_ms", r["_meta"]["load_ms"])
+    for section in (
+        "ada_thresholds", "bundling_rules", "frequency_limits",
+        "downgrade_matrix", "cdt_rules", "coverage_rules",
+        "conditions_library", "medical_history_flags",
+    ):
+        print(f"      {section:22} {len(r[section])}")
+    print(f"      {'overlay_rules':22} {len(r['overlay_rules']['rules'])} active override(s)")
+
+    d6010 = r["ada_thresholds"]["D6010"]
+    row("D6010 bone_loss_mm_min", d6010["bone_loss_mm_min"])
+    row("D6010 auto_approve_score", d6010["auto_approve_score"])
+    if ctx.bone_loss_mm is not None:
+        meets = ctx.bone_loss_mm >= d6010["bone_loss_mm_min"]
+        row(
+            "measured vs threshold",
+            f"{ctx.bone_loss_mm}mm vs >={d6010['bone_loss_mm_min']}mm -> "
+            f"{'meets' if meets else 'below'}",
+        )
+
+    bundle = r["bundling_rules"].get(("D7953", "D6010"))
+    if bundle:
+        row(
+            "D7953+D6010",
+            f"{bundle['bundling_type']}, separable={bundle['separable']}, "
+            f"{bundle['policy_section']}",
+        )
+    if not r["_meta"].get("missing_sections"):
+        print("  + no empty catalogue sections")
 
     print(f"\nsummary(): {ctx.summary()}")
 
