@@ -60,6 +60,7 @@ export const NAV_FOR_ROLE: Record<Role, NavItem[]> = {
     { label: "Submission queue", to: "/revenue-ops", icon: Send },
     { label: "Conditions", to: "/revenue-ops/conditions", icon: ClipboardList },
     { label: "Appeals", to: "/revenue-ops/appeals", icon: Receipt },
+    { label: "Analytics", to: "/revenue-ops/analytics", icon: TrendingUp },
     { label: "Coverage checks", to: "/coverage", icon: ShieldCheck },
   ],
   dso_owner: [
@@ -84,6 +85,7 @@ export const TITLE_FOR_PATH: Array<[string, string]> = [
   ["/evidence", "Clinical evidence"],
   ["/revenue-ops/conditions", "Conditions"],
   ["/revenue-ops/appeals", "Appeals"],
+  ["/revenue-ops/analytics", "Revenue analytics"],
   ["/revenue-ops", "Revenue operations"],
   ["/dso/denials", "Denial patterns"],
   ["/dso/revenue", "Revenue"],

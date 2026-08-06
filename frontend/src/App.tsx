@@ -53,29 +53,12 @@ export default function App() {
           <Route path="/evidence" element={<ClinicalEvidence />} />
           <Route path="/evidence/:id" element={<ClinicalEvidence />} />
 
+          {/* One page, four tabs, tab chosen by the path — see
+              RevenueOps.tabFromPath. */}
           <Route path="/revenue-ops" element={<RevenueOps />} />
-          <Route
-            path="/revenue-ops/conditions"
-            element={
-              <Placeholder
-                title="Conditions"
-                description="Every open condition across the practice, grouped by assignee and SLA."
-                endpoint="GET /decisions/{id}/conditions"
-                audience="Revenue operations"
-              />
-            }
-          />
-          <Route
-            path="/revenue-ops/appeals"
-            element={
-              <Placeholder
-                title="Appeals"
-                description="Denials worth appealing, with viability, deadline and a draft packet."
-                endpoint="GET /decisions/{id}/appeal"
-                audience="Revenue operations"
-              />
-            }
-          />
+          <Route path="/revenue-ops/conditions" element={<RevenueOps />} />
+          <Route path="/revenue-ops/appeals" element={<RevenueOps />} />
+          <Route path="/revenue-ops/analytics" element={<RevenueOps />} />
 
           <Route path="/dso" element={<DSOIntelligence />} />
           <Route
