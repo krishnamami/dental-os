@@ -22,6 +22,18 @@ export default defineConfig({
     },
   },
   build: {
+    /**
+     * Emit `@media (min-width: 1024px)` rather than the range syntax
+     * `@media (width >= 1024px)`.
+     *
+     * The default minifier rewrites media queries to the Level 4 range
+     * form, which Safari only understands from 16.4. An iPad on iOS
+     * 16.0-16.3 does not error on it — it SKIPS the rule, so every
+     * responsive breakpoint silently stops applying and the app renders
+     * at its widest layout on a tablet. Dr. Chinta's chairside iPad is
+     * exactly that device, so the two bytes saved are not worth it.
+     */
+    cssTarget: ["chrome87", "safari14", "firefox78", "edge88"],
     rollupOptions: {
       output: {
         /**
