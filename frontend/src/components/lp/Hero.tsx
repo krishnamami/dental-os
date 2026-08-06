@@ -31,12 +31,14 @@ export default function Hero() {
                 The <br> are unconditional: the break IS the sentence
                 structure here, not a width accommodation, so it has to
                 hold at 375px and at 1440px alike. */}
-            <h1 className="text-5xl font-bold leading-[1.05] tracking-tight text-slate-900 lg:text-6xl">
+            <h1 className="text-[38px] sm:text-[48px] lg:text-[52px] font-bold leading-[1.08] tracking-[-0.03em] text-slate-900">
               Every pre-D denial.
               <br />
-              <span className="text-[#1B5E20]">Caught.</span>
-              <br />
-              <span className="text-[#1B5E20]">Before you submit.</span>
+              <span style={{ color: "#1B5E20" }}>
+                Caught.
+                <br />
+                Before you submit.
+              </span>
             </h1>
 
             <p className="mt-5 max-w-lg text-lg leading-relaxed text-slate-500">
