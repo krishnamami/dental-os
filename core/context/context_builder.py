@@ -260,6 +260,7 @@ class ContextBuilder:
             tenant_id=tenant_id,
             scenario_id=scenario_id,
             patient_name=header.get("patient_name") or "",
+            patient_dob=header.get("dob"),
             provider_name=provider.get("provider_name") or "",
             provider_npi=provider.get("provider_npi") or header.get("provider_npi") or "",
             plan_name=header.get("plan_name") or "",

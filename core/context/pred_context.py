@@ -179,6 +179,11 @@ class PredContext:
     clinical_evidence: list[ClinicalEvidence] = field(default_factory=list)
     payer_response: Optional[PayerResponse] = None
 
+    # Date of birth, for the age limits on cdt_codes (D6010 and D6065
+    # carry an 18-year floor). None means the age check does not run —
+    # reported in missing_inputs rather than assumed to pass.
+    patient_dob: Optional[str] = None
+
     # ── Provider credentialing posture ───────────────────────────────
     # provider_credentialing reads these directly — it needs no
     # resolver, and it must not have to query for them (RULE 5).

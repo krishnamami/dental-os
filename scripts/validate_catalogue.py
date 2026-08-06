@@ -187,8 +187,8 @@ async def main() -> int:
             # Touch each section a persona would read for this code.
             rules["ada_thresholds"].get(code)
             rules["cdt_rules"].get(code)
-            rules["coverage_rules"].get(code)
-            rules["fee_schedules"].get(code)
+            rules["coverage_rules"].get(("delta_dental", code))
+            rules["fee_schedules"].get(("delta_dental", code, HOME_STATE))
     finally:
         rl_logger.removeHandler(catcher)
         rl_logger.setLevel(prior_level)
@@ -203,12 +203,12 @@ async def main() -> int:
     print(f"    {'code':7} {'lines':>5}  {'ada':>4} {'cdt':>4} {'cover':>6} {'fee':>9}")
     for r in billed[:10]:
         c = r["cdt_code"]
-        fee = rules["fee_schedules"].get(c, {}).get("allowed_amount")
+        fee = rules["fee_schedules"].get(("delta_dental", c, HOME_STATE), {}).get("allowed_amount")
         print(
             f"    {c:7} {r['n']:>5}  "
             f"{'yes' if c in rules['ada_thresholds'] else 'NO ':>4} "
             f"{'yes' if c in rules['cdt_rules'] else 'NO ':>4} "
-            f"{'yes' if c in rules['coverage_rules'] else 'NO ':>6} "
+            f"{'yes' if ('delta_dental', c) in rules['coverage_rules'] else 'NO ':>6} "
             f"{('$' + str(fee)) if fee else 'NO':>9}"
         )
 

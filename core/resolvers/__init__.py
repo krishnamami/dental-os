@@ -14,6 +14,7 @@ from core.resolvers.base import (
 from core.resolvers.bone_loss_resolver import resolve_bone_loss
 from core.resolvers.bundling_resolver import resolve_bundling
 from core.resolvers.completeness_resolver import resolve_completeness
+from core.resolvers.coverage_resolver import resolve_coverage
 from core.resolvers.frequency_resolver import resolve_frequency
 from core.resolvers.perio_resolver import resolve_perio
 from core.resolvers.upcoding_detector import resolve_upcoding
@@ -27,6 +28,7 @@ ALL_RESOLVERS = {
     "perio": resolve_perio,
     "appeal_viability": resolve_appeal_viability,
     "completeness": resolve_completeness,
+    "coverage": resolve_coverage,
     "upcoding": resolve_upcoding,
 }
 
@@ -39,6 +41,7 @@ __all__ = [
     "resolve_bone_loss",
     "resolve_bundling",
     "resolve_completeness",
+    "resolve_coverage",
     "resolve_frequency",
     "resolve_perio",
     "resolve_upcoding",

@@ -427,23 +427,42 @@ async def _load(
     _warn_if_empty(rules, "cdt_rules", "cdt_codes")
 
     # ── Layer 2: coverage rules for this payer ───────────────────────
-    coverage: dict[str, dict] = {}
+    # KEYED ON (payer_id, cdt_code), matching frequency_limits and
+    # downgrade_matrix. Every catalogue section that varies by payer now
+    # keys the same way, so a resolver never has to remember which ones
+    # are tuple-keyed and which are not.
+    #
+    # Joined to cdt_codes for age limits: the task spec expected
+    # age_limit_min/max on coverage_rules and they are not there, but
+    # they DO exist on cdt_codes, which is the better home anyway — an
+    # age floor on an implant is a clinical fact, not a payer term.
+    #
+    # Aliases (benefit_pct, pre_d_required, downgrade_to,
+    # missing_tooth_clause, notes) are provided alongside the real
+    # column names so a caller can use either. The underlying columns
+    # are coverage_pct / pred_required / downgrade_to_cdt /
+    # missing_tooth_clause_applies / bundling_note.
+    coverage: dict[tuple, dict] = {}
     for r in await conn.fetch(
         """
-        SELECT payer_id, cdt_code, covered, benefit_category, coverage_pct,
-               frequency_limit, frequency_unit, frequency_scope, bundled_with,
-               bundling_note, bundling_separable, downgrade_to_cdt, downgrade_note,
-               missing_tooth_clause_applies, pred_required,
-               clinical_criteria_required, policy_section
-        FROM coverage_rules
-        WHERE payer_id = $1
-        ORDER BY cdt_code
+        SELECT cr.payer_id, cr.cdt_code, cr.covered, cr.benefit_category,
+               cr.coverage_pct, cr.frequency_limit, cr.frequency_unit,
+               cr.frequency_scope, cr.bundled_with, cr.bundling_note,
+               cr.bundling_separable, cr.downgrade_to_cdt, cr.downgrade_note,
+               cr.missing_tooth_clause_applies, cr.pred_required,
+               cr.clinical_criteria_required, cr.policy_section,
+               c.age_limit_min, c.age_limit_max, c.description
+        FROM coverage_rules cr
+        LEFT JOIN cdt_codes c ON c.cdt_code = cr.cdt_code
+        WHERE cr.payer_id = $1
+        ORDER BY cr.cdt_code
         """,
         payer_id,
     ):
-        coverage[r["cdt_code"]] = {
+        category = r["benefit_category"]
+        entry = {
             "covered": r["covered"],
-            "benefit_category": r["benefit_category"],
+            "benefit_category": category,
             "coverage_pct": _num(r["coverage_pct"]),
             "frequency_limit": r["frequency_limit"],
             "frequency_unit": r["frequency_unit"],
@@ -457,10 +476,35 @@ async def _load(
             "pred_required": r["pred_required"],
             "clinical_criteria_required": r["clinical_criteria_required"],
             "policy_section": r["policy_section"],
+            "description": r["description"],
+            # From cdt_codes, not coverage_rules.
+            "age_limit_min": r["age_limit_min"],
+            "age_limit_max": r["age_limit_max"],
+            # DERIVED, not catalogued. Standard commercial dental
+            # structure: preventive is paid at 100% with no deductible;
+            # basic, major and implant sit behind it. There is no
+            # deductible_applies column to read, so this is stated here
+            # rather than hidden inside the resolver.
+            "deductible_applies": category != "preventive",
+            "deductible_applies_source": "derived from benefit_category",
+            # No column exists for these. None, and reported.
+            "lifetime_maximum": None,
+            "pre_d_threshold": None,
+            "waiting_period_months": None,
+            "plan_type": None,
+            "tooth_position": None,
+            # Aliases for the names the resolver uses.
+            "benefit_pct": _num(r["coverage_pct"]),
+            "pre_d_required": r["pred_required"],
+            "downgrade_to": r["downgrade_to_cdt"],
+            "missing_tooth_clause": r["missing_tooth_clause_applies"],
+            "notes": r["bundling_note"],
             "payer_id": r["payer_id"],
+            "cdt_code": r["cdt_code"],
             "governed_by": "payer",
             "layer": LAYER_PAYER,
         }
+        coverage[(r["payer_id"], r["cdt_code"])] = entry
     rules["coverage_rules"] = coverage
     _warn_if_empty(rules, "coverage_rules", "coverage_rules")
 
@@ -469,7 +513,10 @@ async def _load(
     # GA-25-0005; every other state is that GA amount times a
     # multiplier. A cost estimate built on an estimated rate must be
     # labelled as such before it reaches a patient.
-    fees: dict[str, dict] = {}
+    # Keyed on (payer_id, cdt_code, state) — the fee schedule's own
+    # natural key, and what coverage_resolver looks a downgraded code up
+    # by when it needs the metal rate instead of the ceramic one.
+    fees: dict[tuple, dict] = {}
     for r in await conn.fetch(
         """
         SELECT cdt_code, payer_id, plan_type, state, allowed_amount,
@@ -482,7 +529,7 @@ async def _load(
         state,
     ):
         source = r["source"] or ""
-        fees[r["cdt_code"]] = {
+        fees[(r["payer_id"], r["cdt_code"], r["state"])] = {
             "allowed_amount": _num(r["allowed_amount"]),
             "plan_type": r["plan_type"],
             "state": r["state"],
@@ -644,7 +691,9 @@ async def _load(
     # replaced, so the trace can show ADA | payer | overlay | applied.
     for cdt_code, ov in overlay_by_cdt.items():
         for section in ("coverage_rules", "cdt_rules"):
-            target = rules[section].get(cdt_code)
+            # coverage_rules is tuple-keyed; cdt_rules is not.
+            key = (payer_id, cdt_code) if section == "coverage_rules" else cdt_code
+            target = rules[section].get(key)
             if target is None:
                 continue
             for field, value in (ov["overrides"] or {}).items():

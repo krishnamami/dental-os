@@ -169,7 +169,7 @@ async def main() -> int:
     expect_true(
         "D6065 overlay applied on top of coverage_rules",
         cdt.get("D6065", {}).get("governed_by") == "tenant_overlay"
-        or rules["coverage_rules"].get("D6065", {}).get("governed_by") == "tenant_overlay",
+        or rules["coverage_rules"].get((PAYER, "D6065"), {}).get("governed_by") == "tenant_overlay",
         "clinical_criteria_required forced true by practice policy",
     )
 
@@ -186,7 +186,7 @@ async def main() -> int:
                    if c not in ada]
     print(f"      key CDT codes with no ADA guideline row: {ada_missing or 'none'}")
     cov_missing = [c for c in ("D6010", "D7953", "D6065")
-                   if c not in rules["coverage_rules"]]
+                   if (PAYER, c) not in rules["coverage_rules"]]
     print(f"      key CDT codes with no Delta coverage rule: {cov_missing or 'none'}")
 
     await close_pool()
