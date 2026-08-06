@@ -15,7 +15,6 @@ import AppShell from "./components/AppShell";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { useAuth } from "./context/AuthContext";
 import { HOME_FOR_ROLE } from "./routes";
-import Placeholder from "./components/Placeholder";
 import AdminConsole from "./pages/app/admin/AdminConsole";
 import CoverageIntelligence from "./pages/app/coverage/CoverageIntelligence";
 import DSOIntelligence from "./pages/app/dso/DSOIntelligence";
@@ -60,40 +59,11 @@ export default function App() {
           <Route path="/revenue-ops/appeals" element={<RevenueOps />} />
           <Route path="/revenue-ops/analytics" element={<RevenueOps />} />
 
+          {/* One page, four tabs, tab chosen by the path. */}
           <Route path="/dso" element={<DSOIntelligence />} />
-          <Route
-            path="/dso/denials"
-            element={
-              <Placeholder
-                title="Denial patterns"
-                description="The conditions driving denials across every practice in the group."
-                endpoint="GET /portfolio/summary"
-                audience="DSO owner"
-              />
-            }
-          />
-          <Route
-            path="/dso/revenue"
-            element={
-              <Placeholder
-                title="Revenue"
-                description="Contracted, insurance and patient responsibility per location."
-                endpoint="GET /portfolio/summary"
-                audience="DSO owner"
-              />
-            }
-          />
-          <Route
-            path="/dso/training"
-            element={
-              <Placeholder
-                title="Training"
-                description="Where documentation habits cost the most, by practice."
-                endpoint="GET /portfolio/summary"
-                audience="DSO owner"
-              />
-            }
-          />
+          <Route path="/dso/denials" element={<DSOIntelligence />} />
+          <Route path="/dso/revenue" element={<DSOIntelligence />} />
+          <Route path="/dso/training" element={<DSOIntelligence />} />
         </Route>
       </Route>
 
@@ -102,38 +72,9 @@ export default function App() {
       <Route element={<ProtectedRoute allow={["accord_admin"]} />}>
         <Route element={<AppShell />}>
           <Route path="/admin" element={<AdminConsole />} />
-          <Route
-            path="/admin/onboard"
-            element={
-              <Placeholder
-                title="Onboard tenant"
-                description="Add a practice: payers, providers, fee schedule state and overlay rules."
-                audience="Accord admin"
-              />
-            }
-          />
-          <Route
-            path="/admin/catalogue"
-            element={
-              <Placeholder
-                title="Catalogue"
-                description="Catalogue versions and row counts — which rules decided a case, and were they current."
-                endpoint="GET /health"
-                audience="Accord admin"
-              />
-            }
-          />
-          <Route
-            path="/admin/health"
-            element={
-              <Placeholder
-                title="System health"
-                description="Both databases, tenant count, scenario count, payers and states."
-                endpoint="GET /health"
-                audience="Accord admin"
-              />
-            }
-          />
+          <Route path="/admin/onboard" element={<AdminConsole />} />
+          <Route path="/admin/catalogue" element={<AdminConsole />} />
+          <Route path="/admin/health" element={<AdminConsole />} />
         </Route>
       </Route>
 
