@@ -45,7 +45,7 @@ export default function Nav() {
             <Logo />
           </a>
 
-          <nav className="hidden items-center gap-7 md:flex">
+          <nav className="hidden items-center gap-7 lg:flex">
             {LINKS.map((l) => (
               <a
                 key={l.label}
@@ -57,7 +57,7 @@ export default function Nav() {
             ))}
           </nav>
 
-          <div className="hidden items-center gap-2 md:flex">
+          <div className="hidden items-center gap-2 lg:flex">
             <Link
               to="/login"
               className="rounded-lg px-3.5 py-2 text-[13.5px] font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
@@ -77,7 +77,7 @@ export default function Nav() {
             onClick={() => setOpen((v) => !v)}
             aria-label={open ? "Close menu" : "Open menu"}
             aria-expanded={open}
-            className="-mr-2 rounded-lg p-2 text-gray-600 hover:bg-gray-50 md:hidden"
+            className="-mr-2 rounded-lg p-2 text-gray-600 hover:bg-gray-50 lg:hidden"
           >
             {open ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -88,7 +88,7 @@ export default function Nav() {
           covers the top third leaves the page scrolling behind it, which
           reads as a stuck menu. inset-0 below the 52px bar. */}
       {open && (
-        <div className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-white md:hidden">
+        <div className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-white lg:hidden">
           <Container className="py-4">
             <nav className="flex flex-col gap-1">
               {LINKS.map((l) => (
