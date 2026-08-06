@@ -1,6 +1,6 @@
 # Accord Dental OS — Project Context
 
-**Last updated:** 2026-08-05 &nbsp;·&nbsp; **Phase:** 0 (docs) COMPLETE &nbsp;·&nbsp; **Next:** Phase 1 foundation
+**Last updated:** 2026-08-06 &nbsp;·&nbsp; **Phase:** 5 (runner) COMPLETE &nbsp;·&nbsp; **Next:** Phase 6 — API surface
 
 > This file tracks build **state** — it changes every session.
 > `docs/PRD.md` describes product **intent** and `domains/dental/decisions.yaml`
@@ -18,8 +18,13 @@ cp .env.example .env        # then add your ANTHROPIC_API_KEY
 uvicorn api.main:app --port 9010
 ```
 
-> **`api.main` does not exist yet.** Phase 1 creates it. Until then the uvicorn
-> line is the target, not a working command.
+> **`api.main` does not exist yet.** Phase 6 creates it. Until then the uvicorn
+> line is the target, not a working command. What DOES run end-to-end today is
+> the wave runner:
+>
+> ```bash
+> python scripts/evaluate_dental_scenarios.py     # 40 scenarios, all 5 waves
+> ```
 
 **dental-os reads from the dental-simulator RDS. The simulator must have data
 loaded first** — this repo has no data of its own and never will.
@@ -28,12 +33,14 @@ loaded first** — this repo has no data of its own and never will.
 python scripts/test_connection.py
 ```
 
-Expected, verified against the live RDS on 2026-08-06:
+Expected, re-verified against the live RDS on 2026-08-06 **after Group U
+landed** — every number below moved except the catalogue tables:
 
 ```
-  pred_states          35      (approved=8, denied=7, pended=20)
-  clinical_evidence   183      (108 with an s3_key + 75 structured payloads)
-  procedure_lines      67
+  pred_requests        40      (approved=13, denied=7, pended=20)
+  pred_states          40      same distribution
+  clinical_evidence   212      (124 with an s3_key)
+  procedure_lines      72
   fee_schedules       588      28 codes x 3 payers x 7 states
   coverage_rules      543      181 codes x 3 payers   (was 14)
   cdt_codes           181
@@ -42,8 +49,12 @@ Expected, verified against the live RDS on 2026-08-06:
   bundling_rules       20
   ada_guidelines       10
   downgrade_matrix      9
+  medical_history_flags 8
   providers             3
 ```
+
+> **If you have a memory of "35 scenarios, approved=8", it is from before
+> 2026-08-06.** Group U added 5 approvals. Any script asserting 35 is stale.
 
 ## Catalogue versions
 
@@ -154,43 +165,89 @@ answers. dental-os must point at the RDS host explicitly — which is what
 
 ## Repo State at End of Last Session
 
-**Phase 0 — docs: COMPLETE.**
+**Phases 0–5: COMPLETE.** The pipeline runs end to end — a pred_request_id in,
+nine decisions and an audit bundle out.
 
-| File | Lines | What it is |
+| Phase | What it built | Status |
 |---|---|---|
-| `docs/PRD.md` | 650 | Product intent — 11 sections + 2 appendices |
-| `domains/dental/decisions.yaml` | 663 | **Normative.** 9 decisions × 5 waves |
-| `domains/dental/knowledge_base.json` | 995 | 8 entities + 7 catalogue + 4 dental-os-owned |
-| `CONTEXT.md` | this file | Build state + operational rules |
+| 0 | `docs/PRD.md`, `decisions.yaml`, `knowledge_base.json`, this file | done |
+| 1 | `core/db/` pools, `migrations/001` (8 views) + `002` (4 tables) | done |
+| 2 | `core/catalogue/` — `rule_loader` + `context_enricher` | done |
+| 3 | `core/resolvers/` — coverage, completeness, waiting period, … | done |
+| 4 | 8 personas in `domains/dental/personas/` | done |
+| 5 | `core/cron/runner.py` + `pre_d_assessment` + the eval harness | done |
 
-Also present: `.env.example`, `requirements.txt`, package skeleton
-(`core/`, `core/context/`, `core/db/`, `personas/`, `api/`, `docs/`).
+`domains/dental/decisions.yaml` is still **normative** — boundaries, modes and
+waves come from there, not from the runner's inline copy.
 
-**Phase 1 — foundation: NOT STARTED.** Nothing under `core/`, `personas/` or
-`api/` beyond empty `__init__.py` files. There is no application code in this
-repo yet.
+### What Phase 5 added
+
+`core/cron/runner.py` — `PersonaRunner` drives all five waves for one pre-D.
+`ContextBuilder` → `ContextEnricher` → waves 1-5 → `decision_outputs` then
+`persona_bundles` in one transaction (RULE 10).
+
+`domains/dental/personas/pre_d_assessment.py` — the Wave 4 synthesis. It was
+deferred out of Phase 4 (`personas/__init__.py` said "Phase 5") because it
+reads the other eight rather than producing findings of its own. That makes
+**nine** personas, not eight.
+
+`scripts/evaluate_dental_scenarios.py` — all 40 scenarios through the runner,
+signal assertions on the 9 that have documented expectations.
+
+**Verified on the live RDS 2026-08-06:**
+
+```
+  40/40 scenarios PASSED       0 persona exceptions
+  decision_outputs   347 rows  W1=120 W2=80 W3=40 W4=40 W5=67
+  persona_bundles     40 rows  1 per pre-D, all is_current
+  outcomes           272 recommend / 63 escalate / 12 block
+```
+
+> **347, not 360.** `appeal_specialist` carries `only_if decision in (denied,
+> pended)`, and 27 of 40 qualify: 27×9 + 13×8 = 347. A run that produces 360
+> means the Wave 5 gate stopped working.
+
+Three things a future session will otherwise rediscover the hard way:
+
+- **`decision_outputs` has no unique key on `(pred_request_id, decision_id)`.**
+  `migrations/002` declares it append-only and versioned — a re-run adds rows,
+  never mutates them. `ON CONFLICT … DO UPDATE` cannot bind and would erase the
+  prior run's audit trail if you added a constraint to make it bind.
+  `persona_bundles` carries the versioning instead (`is_current` + `version`).
+- **`catalogue_rules` is tuple-keyed** since T-10i — `(payer_id, cdt_code)`,
+  and `(payer_id, cdt_code, state)` for fees. `json.dumps` raises `TypeError`
+  on it. `runner._stringify_keys` joins them with `|` before the JSONB write.
+- **Personas are invoked through `run()`, never `_compute_offline()`.** `run()`
+  is what carries the never-raises guarantee; calling the inner method directly
+  lets one bad persona take down its wave and every wave after it.
 
 ### Commit history
 
 ```
+5fb590d  feat: Phase 5 — PersonaRunner complete
+5fdfb70  docs: close Gap #7 — PRD Known Gap #5 wording
+0a6fbae  docs: close Gap #4 — coverage_rules complete
+014ab33  feat: T-10i — coverage_resolver + rule_loader tuple keys
+eba5d6d  feat: Phase 4 — 9 personas complete
+14d1983  feat: Phase 3 — resolvers complete
+a732926  feat: catalogue T-10b/e
+ca40204  feat: Phase 2 — catalogue layer
+148c313  feat: Phase 1 — foundation complete
+7c23a3e  docs: T-03 + T-04 — knowledge_base.json and CONTEXT.md
 2eeb592  docs: reword Known Gap #5 — two CONFIDENCE_FLOOR constants
-5d38575  fix: decisions.yaml snake_case personas + confidence threshold
-86a76a4  docs: T-01 + T-02 — PRD.md and decisions.yaml
-529254e  feat: dental-os scaffold — .env.example, requirements.txt, docs/
-f3aba63  feat: dental-os scaffold — folder structure only
-ae71aaf  init: dental-os repo — Accord Dental Decision OS
 ```
 
-### Suggested Phase 1 order
+### Suggested Phase 6 order
 
-1. `scripts/test_connection.py` — RLS-aware, prints the count table above
-2. `core/db/` — asyncpg pool, DSN resolution, `SET app.tenant_id` on acquire
-3. `migrations/001_context_views.sql` — the 8 per-persona context views
-4. `migrations/002_dental_os_tables.sql` — `decision_outputs`,
-   `persona_bundles`, `provider_feedback`, `appeal_packets`
-5. `core/context/` — the enricher (catalogue gateway) + bundle builder
-6. `personas/base.py` — sync, DB-less persona contract
-7. First persona end-to-end: `eligibility_analyst` against `PRED-SIM-DA-A01`
+1. `api/main.py` — FastAPI on :9010, the uvicorn line at the top of this file
+2. `POST /pred-requests/{id}/run` — one `PersonaRunner.run()` per request
+3. `GET /pred-requests/{id}/decisions` — read `decision_outputs`, current only
+4. `GET /pred-requests/{id}/bundle` — the replay path, reads `persona_bundles`
+   directly (no view, no enricher — RULE 10)
+5. `provider_feedback` write path — the human override capture that the
+   reflection block in `decisions.yaml` already specifies
+6. `appeal_packets` generator — dental-simulator Gap #3, and the highest-value
+   unbuilt thing in either repo
 
 ---
 
@@ -333,27 +390,55 @@ Reference case — **DA-M05**, "Low-Confidence Scanned Extraction":
 
 | # | Gap | Where it lives | Status |
 |---|---|---|---|
-| 1 | Readiness flags not wired | dental-simulator | open |
-| 2 | Group U scenarios not built | dental-simulator | open |
+| 1 | Readiness flags not wired | dental-simulator | half-closed |
+| 2 | Group U — urgency corpus | dental-simulator | half-closed |
 | 3 | Appeal generation — table exists, no logic | dental-simulator | open |
 | 4 | `coverage_rules` breadth | dental-simulator | **CLOSED** |
 | 4a | Coverage *provenance* — 14 of 181 traced | dental-simulator | open |
-| 5 | `AI_FALLBACK_FLOOR` 0.6 vs `TRUST_FLOOR` 0.70 | dental-simulator | half-closed |
+| 5 | `AI_FALLBACK_FLOOR` 0.6 vs `TRUST_FLOOR` 0.70 | dental-simulator | **CLOSED** |
 | 6 | DA-M05 described wrong in dental-simulator PRD §15 | dental-simulator | open |
 | 7 | `pred_requests.status` is a single value | dental-simulator | open |
 
-**GAP #1 — Readiness flags not wired.**
-The 14 named checks in dental-simulator PRD §12 are specified but never rolled
-up. Verified on the live RDS: `readiness_flags` is **`{}` — empty JSONB on all
-35 rows, not NULL.** Both PRDs say "NULL"; that is wrong, and the difference
-matters: a truthiness check passes and an `IS NULL` check fails, so neither
-tells you the field is unwired. `status` and `decision_confidence` genuinely are
-NULL (0 of 35 populated). `pre_d_assessment` is the natural consumer.
+**GAP #1 — Readiness flags. Half-closed, and the half that closed is the
+useful one.**
+All **14 named checks are now populated on all 40 rows** — `xray_present`,
+`bundling_reviewed`, `narrative_present`, `provider_verified`,
+`eligibility_verified`, `frequency_limit_ok`, `waiting_period_met`,
+`annual_max_sufficient`, `deductible_known`, `downgrade_noted`,
+`no_fraud_signals`, `perio_chart_present`, `clinical_note_present`,
+`pre_d_required_noted`. They were `{}` on all 35 rows as recently as
+2026-08-05, so anything written before then describing them as unwired is out
+of date.
 
-**GAP #2 — Group U not built.**
-35 scenarios ship (A/B/C/D/M/F). Group U — urgency/emergency, 3 scenarios — is
-specified but not in the manifest. Until it exists dental-os has no
-expedited-path corpus and no scenario exercises an SLA under pressure.
+Still NULL on all 40: **`status`** and **`decision_confidence`**. `pre_d_assessment`
+reads the flags today and computes its own verdict rather than waiting for
+`decision_confidence` — see `PreDAssessment._compute_offline`.
+
+**GAP #2 — Group U exists, but it is not the urgency corpus.**
+40 scenarios now ship: A/B/C/D/M/F plus **U01–U05**. That is 5, not the 3 the
+spec called for, and the content is not what was specified either. The spec
+asked for emergency extraction + graft, acute perio abscess, and trauma across
+multiple teeth. What was built is five routine single-code cases:
+
+```
+  U01  D1110  prophylaxis            $150   approved   criteria_score 1.000
+  U02  D0274  four bitewings          $85   approved   criteria_score 1.000
+  U03  D2391  one-surface composite  $175   approved   criteria_score 1.000
+  U04  D7140  simple extraction      $185   approved   criteria_score 1.000
+  U05  D4910  perio maintenance      $175   approved   criteria_score 1.000
+```
+
+**What that closes:** the second half of the original gap — "there are no
+uncontested-approval scenarios beyond Group A's five, which is wrong for
+measuring false-positive rate." Group U is now exactly that corpus, and it is
+what makes a false-positive claim measurable: all five run clean through the
+runner, and U01/U02/U03 reach `PRED_READY_TO_SUBMIT`.
+
+**What is still open:** the expedited path. Nothing in Group U is urgent, none
+of it carries an SLA, and `pred_requests` has no urgency column to carry one.
+**No scenario in the corpus exercises an SLA under pressure**, which was the
+original point of Group U. Do not read "Group U exists" as "the expedited path
+is tested."
 
 **GAP #3 — Appeal generation.**
 The `appeals` table has `rationale`, `policy_citation`, `overturn_reason`
@@ -364,7 +449,9 @@ either repo — the PRD's "3–5 hours → <2 minutes" is unearned until it exis
 **GAP #4 — coverage_rules breadth. CLOSED.**
 **543 rows = 181 CDT codes × 3 payers** (Delta Dental PPO, Cigna DPPO,
 MetLife PDP). Every code resolves for every payer; `coverage_resolver` returns
-no SAFE_DEFAULT for any billed pair across the 35 scenarios.
+no SAFE_DEFAULT for any billed pair across the 35 scenarios that existed when
+this was measured. Group U's five codes (D1110, D0274, D2391, D7140, D4910) are
+all in `cdt_codes` and all resolve, but they were not part of that sweep.
 
 ```
   Tier 1  explicit payer rules      14 codes (Delta only)
@@ -385,6 +472,7 @@ to need a phone call to Delta:
 -> patient owes`. Validated against dental-simulator's own `cost_estimates`,
 computed independently: **32 of 35 scenarios agree on the patient total**, and
 DA-A01 agrees line for line ($1,017.50 / $212.50 / $595.00, total $1,825.00).
+That 32/35 predates Group U — the comparison has not been re-run at 40.
 
 Seeded by `dental-simulator scripts/seed_coverage_rules_tier2_tier3.py`,
 idempotent, Tier 1 asserted unchanged.
@@ -410,9 +498,14 @@ And on fees: only Georgia's **66** SPA-adjusted rows trace to a government
 document. The other six states are GA amounts times a judgement multiplier —
 see `refresh_fee_schedules.py`.
 
-**GAP #5 — Two confidence floors.**
-See the section above. Half-closed: dental-os agrees with the assembler now;
-dental-simulator still disagrees with itself.
+**GAP #5 — Two confidence floors. CLOSED.**
+The rename shipped in dental-simulator commit `89cb834` *"fix: close Gap #5 +
+Gap #6"*. There is no `CONFIDENCE_FLOOR` left in either repo — it is
+`AI_FALLBACK_FLOOR = 0.6` (`core/documents/extractors/base.py`) and
+`TRUST_FLOOR = 0.70` (`pdf_adapter.py`, `clinical_assembler.py`,
+`build_scenarios_xlsx.py`), and each declaration carries a comment naming its
+counterpart. Two thresholds because there are two questions — see the section
+above. If you find a bare `CONFIDENCE_FLOOR`, it predates that commit.
 
 **GAP #6 — DA-M05 described wrong upstream.**
 dental-simulator PRD §15 lists DA-M05 as "X-ray date conflict — report says
@@ -422,18 +515,21 @@ Extraction"** with a 0.45 PA X-ray and a 0.72 note. The manifest is what runs.
 Fix the PRD, not the manifest.
 
 **GAP #7 — `pred_requests.status` carries no information.**
-Every one of the 35 rows has `status = 'assembled'`. The lifecycle values the
+Every one of the 40 rows has `status = 'assembled'`. The lifecycle values the
 knowledge base documents (draft / submitted / pended / approved / denied /
 appealed) are not populated — the real outcome lives in
 `pred_requests.decision` and `pred_states.decision`. Read `decision`, not
 `status`, until the lifecycle is wired.
 
-> Gaps 1–6 are all upstream in dental-simulator. dental-os cannot close any of
-> them from this repo; it can only avoid being surprised by them.
+> Every remaining gap is upstream in dental-simulator. dental-os cannot close
+> one from this repo; it can only avoid being surprised by it. What it CAN do
+> is notice when one moves — #1, #2 and #5 all changed under this repo without
+> a dental-os commit, and the only reason we know is that Phase 5 re-read the
+> live RDS instead of trusting this file.
 
 ---
 
-## The 35 Scenarios
+## The 40 Scenarios
 
 All ids take the form `PRED-SIM-DA-{GROUP}{NN}` (RULE 14).
 
@@ -445,9 +541,15 @@ All ids take the form `PRED-SIM-DA-{GROUP}{NN}` (RULE 14).
 | D | `D01`–`D05` | 5 | Complex / escalated — OON specialist, all-on-4, sequencing, med-dental crossover, appeal |
 | M | `M01`–`M05` | 5 | Messy data — member ID, CDT/note conflict, surface conflict, duplicate, low-confidence scan |
 | F | `F01`–`F05` | 5 | Fraud / integrity — upcoding, phantom, frequency gaming, unbundling, waived copay |
+| U | `U01`–`U05` | 5 | Routine single-code approvals — the false-positive baseline. **Not** the urgency corpus its name suggests; see GAP #2 |
 
-**Verified distribution on the live RDS:** approved = 8, denied = 7,
-pended = 20.
+**Verified distribution on the live RDS 2026-08-06:** approved = 13,
+denied = 7, pended = 20.
+
+Group A and Group U are both clean, and they are not interchangeable. Group A
+is multi-line and realistic; Group U is one code, one tooth, nothing
+contested. A false positive on Group U means the engine is flagging routine
+dentistry.
 
 Spot-check one through the simulator's ALB:
 
@@ -468,9 +570,29 @@ FROM pred_states ORDER BY pred_request_id;
 denied as "not separately payable" unless the graft's necessity is documented
 independent of the implant. This is the case the product exists for.
 
-> `scripts/check_phase5.py` expects DA-A01 to land on **pended** (bundling
+> `dental-simulator/scripts/check_phase5.py` (upstream — there is no such
+> script in this repo) expects DA-A01 to land on **pended** (bundling
 > conflict), while dental-simulator PRD §15 lists Group A as clean APPROVEs.
 > The check script matches the database. Don't be thrown by the PRD table.
+
+Run through all five waves and see it end to end:
+
+```
+W1 eligibility_analyst     ELIG_FREQUENCY_UNVERIFIED, ELIGIBILITY_VERIFIED
+W1 provider_credentialing  PROVIDER_VERIFIED
+W1 fraud_integrity         INTEGRITY_VERIFIED
+W2 coverage_analyst        COVERAGE_BUNDLING_CONFLICT, COVERAGE_DOWNGRADE_APPLIED,
+                           COVERAGE_PRED_REQUIRED
+W2 clinical_reviewer       CLINICAL_CRITERIA_MET, CLINICAL_NARRATIVE_MISSING
+W3 documentation_reviewer  DOC_NARRATIVE_MISSING
+W4 pre_d_assessment        PRED_CONDITIONS_OPEN        submission_ready=False
+W5 appeal_specialist       APPEAL_VIABLE, APPEAL_PACKET_READY
+W5 dso_portfolio_manager   PORTFOLIO_* (4)
+```
+
+The bundling conflict in W2 becomes a narrative gap in W3, which is what keeps
+W4 from submitting, which is what makes W5's appeal viable. That chain is the
+product.
 
 ---
 
@@ -486,5 +608,11 @@ independent of the implant. This is the case the product exists for.
 
 On conflict: `decisions.yaml` beats every prose document, and the live RDS beats
 every document including this one. Everything in this file marked "verified" was
-read from the database on 2026-08-05 — re-verify before trusting it in a much
+read from the database on **2026-08-06** — re-verify before trusting it in a much
 later session.
+
+That is not boilerplate. Between 2026-08-05 and 2026-08-06 the corpus went from
+35 scenarios to 40, `readiness_flags` went from empty to fully populated on
+every row, and the `CONFIDENCE_FLOOR` split was renamed away upstream — none of
+which produced a commit in this repo. **Re-run `scripts/test_connection.py`
+before you trust a count on this page.**

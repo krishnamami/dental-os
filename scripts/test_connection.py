@@ -28,21 +28,24 @@ from core.db.connection import (  # noqa: E402
 
 TENANT = DEFAULT_TENANT
 
-# Counts verified against the live RDS 2026-08-05. The check is >=, so a
-# reload that adds rows still passes; a load that dropped rows fails.
+# Counts re-verified against the live RDS 2026-08-06, after Group U took the
+# corpus from 35 scenarios to 40. The check is >=, so a reload that adds rows
+# still passes; a load that dropped rows fails. That is why the stale 35s here
+# never failed once Group U landed — >= hides growth, and the only thing that
+# caught it was reading the table directly. Re-measure, don't assume.
 TABLES = [
-    ("pred_states", 35),
-    ("pred_requests", 35),
-    ("eligibility_profiles", 35),
-    ("clinical_evidence", 183),
-    ("procedure_lines", 67),
-    ("cost_estimates", 67),
-    ("payer_responses", 35),
-    ("pred_audit_log", 277),
-    ("evidence_nodes", 108),
-    ("evidence_edges", 24),
+    ("pred_states", 40),
+    ("pred_requests", 40),
+    ("eligibility_profiles", 40),
+    ("clinical_evidence", 212),
+    ("procedure_lines", 72),
+    ("cost_estimates", 72),
+    ("payer_responses", 40),
+    ("pred_audit_log", 312),
+    ("evidence_nodes", 124),
+    ("evidence_edges", 25),
     ("pred_condition_instances", 85),
-    ("patients", 35),
+    ("patients", 40),
     ("providers", 3),
     ("plans", 3),
     ("payers", 3),
