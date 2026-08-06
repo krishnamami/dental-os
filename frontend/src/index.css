@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Vite's template ships an opinionated dark-mode body style that fights
+   Tailwind's reset. Removed — page-level styling belongs in components. */
+html,
+body,
+#root {
+  height: 100%;
+}
