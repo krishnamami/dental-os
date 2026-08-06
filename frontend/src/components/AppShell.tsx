@@ -16,7 +16,7 @@ import { ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { useDemoLink } from "../hooks/useDemo";
 import { NAV_FOR_ROLE, titleForPath, type NavItem } from "../routes";
 import DemoBanner from "./DemoBanner";
-import { Logo } from "./lp/primitives";
+import { AccordLogo } from "./AccordLogo";
 
 /** Active when the pathname matches, ignoring any query string —
  *  several nav items differ only by `?filter=`, and comparing the full
@@ -48,7 +48,7 @@ export default function AppShell() {
         <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white lg:flex">
           <div className="flex h-[52px] items-center border-b border-gray-200 px-4">
             <Link to={demoLink("/")}>
-              <Logo size={28} />
+              <AccordLogo size={24} />
             </Link>
           </div>
 

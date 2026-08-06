@@ -22,7 +22,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ROLES, ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { HOME_FOR_ROLE } from "../routes";
 import type { Role } from "../types/dental";
-import { Logo } from "../components/lp/primitives";
+import { AccordLogo } from "../components/AccordLogo";
 
 const TENANTS = [
   { id: "suwanee_smiles", label: "Suwanee Smiles Dental — GA" },
@@ -65,7 +65,7 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="text-center">
           <Link to="/" className="inline-block">
-            <Logo size={34} />
+            <AccordLogo size={30} />
           </Link>
           <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.01em] text-gray-900">
             Sign in to Accord Dental

@@ -288,7 +288,7 @@ export default function DemoModal({
               <button
                 type="submit"
                 disabled={status === "sending"}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-accord-green-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accord-green-700 disabled:opacity-60"
+                className="w-full rounded-lg bg-[#1B5E20] py-3 font-semibold text-white transition hover:bg-[#154d19] disabled:opacity-60"
               >
                 {status === "sending"
                   ? "Sending…"

@@ -1,13 +1,13 @@
-import { ArrowRight } from "lucide-react";
+import { Play } from "lucide-react";
 
 import { useDemoModal } from "../../hooks/useDemoModal";
-import { Container, Eyebrow, GhostButton, PrimaryButton } from "./primitives";
+import { Container, Eyebrow } from "./primitives";
 import WorkbenchCard from "./WorkbenchCard";
 
 const TRUST = [
   { icon: "🔒", label: "HIPAA compliant" },
   { icon: "📋", label: "Audit trail built in" },
-  { icon: "⚖️", label: "ADA + payer citations" },
+  { icon: "⚖", label: "ADA + payer citations" },
   { icon: "🌐", label: "No black boxes" },
 ];
 
@@ -31,33 +31,35 @@ export default function Hero() {
                 The <br> are unconditional: the break IS the sentence
                 structure here, not a width accommodation, so it has to
                 hold at 375px and at 1440px alike. */}
-            <h1 className="max-w-xl text-5xl font-bold leading-[1.05] tracking-tight text-gray-900 md:text-6xl">
+            <h1 className="text-5xl font-bold leading-[1.05] tracking-tight text-slate-900 lg:text-6xl">
               Every pre-D denial.
               <br />
-              <span className="text-accord-green-900">Caught.</span>
+              <span className="text-[#1B5E20]">Caught.</span>
               <br />
-              <span className="text-accord-green-900">
-                Before you submit.
-              </span>
+              <span className="text-[#1B5E20]">Before you submit.</span>
             </h1>
 
-            <p className="mt-5 max-w-xl text-[15px] leading-relaxed text-gray-500 sm:text-base">
-              Accord reads the payer policy, the clinical evidence, and the
-              plan's own limits before the claim goes out — then tells you
-              exactly what is missing, who fixes it, and by when.
+            <p className="mt-5 max-w-lg text-lg leading-relaxed text-slate-500">
+              Accord gives dental providers the tools to catch every denial
+              before it happens. Evidence assembled. Policy applied. Decisions
+              explained.
             </p>
 
             <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              <PrimaryButton
+              <button
+                type="button"
                 onClick={modal.open}
-                className="min-h-[44px] w-full sm:w-auto"
+                className="min-h-[44px] w-full rounded-lg bg-[#1B5E20] px-6 py-3 font-semibold text-white transition hover:bg-[#154d19] sm:w-auto"
               >
                 Request a demo
-              </PrimaryButton>
-              <GhostButton href="#how-it-works" className="min-h-[44px] w-full sm:w-auto">
-                See how it works
-                <ArrowRight size={15} />
-              </GhostButton>
+              </button>
+              <a
+                href="#see-it"
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-[#1B5E20] px-6 py-3 font-semibold text-[#1B5E20] transition hover:bg-[#E8F5E9] sm:w-auto"
+              >
+                <Play size={14} fill="currentColor" />
+                See it in action
+              </a>
             </div>
 
             {/* Claims about how the product behaves, not certifications.
@@ -65,12 +67,9 @@ export default function Hero() {
                 is no third-party attestation behind it yet, and it should
                 come down or gain a footnote before it faces a buyer's
                 security review. */}
-            <ul className="mt-6 flex flex-wrap gap-x-5 gap-y-2">
+            <ul className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-500">
               {TRUST.map((t) => (
-                <li
-                  key={t.label}
-                  className="flex items-center gap-1.5 text-[12.5px] text-gray-500"
-                >
+                <li key={t.label} className="flex items-center gap-1.5">
                   <span aria-hidden="true">{t.icon}</span>
                   {t.label}
                 </li>

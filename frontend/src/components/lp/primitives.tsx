@@ -125,51 +125,6 @@ export function GhostButton({
   );
 }
 
-/**
- * The wordmark: the accord mark plus "accord".
- *
- * ONE definition, used by the nav, the app sidebar, the footer and the
- * login screen. Four copies of an <img> plus a <span> drift on the
- * first size tweak, and a logo that is 32px in one place and 28px in
- * another looks like a bug rather than a choice.
- *
- * The word is "accord", not "accorddental" — the company is Accord and
- * the dental product lives at accorddental.io. The domain says which
- * product; the mark says whose it is.
- *
- * Explicit width/height on the img reserves the box before the PNG
- * arrives, so the nav does not jump when it loads. The source is
- * 122x112, hence the 1.09 ratio baked into the widths below.
- */
-export function Logo({
-  size = 32,
-  className = "",
-}: {
-  /** Rendered height in px. 32 in the marketing nav, 28 in the app. */
-  size?: number;
-  className?: string;
-}) {
-  const width = Math.round(size * (122 / 112));
-  return (
-    <span className={`flex items-center gap-2 ${className}`}>
-      <img
-        src="/accord_logo.png"
-        alt="Accord"
-        width={width}
-        height={size}
-        style={{ height: size, width }}
-        className="flex-shrink-0"
-      />
-      <span
-        className="font-semibold tracking-tight text-gray-900"
-        style={{ fontSize: Math.round(size * 0.53) }}
-      >
-        accord
-      </span>
-    </span>
-  );
-}
-
 /** Section wrapper — vertical rhythm in one place. */
 export function Section({
   id,
