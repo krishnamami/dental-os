@@ -92,7 +92,7 @@ shared_data:
 # ─────────────────────────────────────────────
 decisions:
 
-  # ══ WAVE 1 — INDEPENDENT, RUN IN PARALLEL ══════════════
+  # == WAVE 1 — INDEPENDENT, RUN IN PARALLEL ==============
 
   - id: eligibility_analyst
     name: Eligibility analyst
@@ -114,7 +114,7 @@ decisions:
       - pred_state
       - eligibility_profile
       - payer_rules
-    persona: EligibilityAnalyst
+    persona: eligibility_analyst
     mode: recommend
     risk_level: medium
     owner_team: front_desk
@@ -165,7 +165,7 @@ decisions:
     shared_data:
       - pred_state
       - payer_rules
-    persona: ProviderCredentialingAgent
+    persona: provider_credentialing
     mode: human_approval
     risk_level: high
     owner_team: billing
@@ -216,7 +216,7 @@ decisions:
       - pred_state
       - payer_rules
       - conditions_library
-    persona: FraudIntegrityAgent
+    persona: fraud_integrity
     mode: human_approval
     risk_level: high
     owner_team: billing
@@ -242,7 +242,7 @@ decisions:
       - FRAUD_SURFACE_CONFLICT
     trace_required: true
 
-  # ══ WAVE 2 — DEPENDS ON WAVE 1 ═════════════════════════
+  # == WAVE 2 — DEPENDS ON WAVE 1 =========================
 
   - id: coverage_analyst
     name: Coverage analyst
@@ -264,7 +264,7 @@ decisions:
       - pred_state
       - payer_rules
       - eligibility_profile
-    persona: CoverageAnalyst
+    persona: coverage_analyst
     mode: recommend
     risk_level: medium
     owner_team: billing
@@ -328,7 +328,7 @@ decisions:
       - pred_state
       - ada_guidelines
       - conditions_library
-    persona: ClinicalReviewer
+    persona: clinical_reviewer
     mode: recommend
     risk_level: medium
     owner_team: dentist
@@ -377,7 +377,7 @@ decisions:
     contamination_guard:
       fail_if_any_upstream_blocked: true
 
-  # ══ WAVE 3 — DEPENDS ON WAVE 2 ═════════════════════════
+  # == WAVE 3 — DEPENDS ON WAVE 2 =========================
 
   - id: documentation_reviewer
     name: Documentation reviewer
@@ -398,7 +398,7 @@ decisions:
       - pred_state
       - conditions_library
       - ada_guidelines
-    persona: DocumentationReviewer
+    persona: documentation_reviewer
     mode: recommend
     risk_level: medium
     owner_team: front_desk
@@ -409,13 +409,28 @@ decisions:
       - decision: clinical_reviewer
         required_output: criteria_score
         inherit_context: true
+    # CONFIDENCE_FLOOR = 0.70 — the ingestion-side floor in dental-simulator:
+    #   core/ingestion/adapters/pdf_adapter.py          CONFIDENCE_FLOOR = 0.70
+    #   domains/dental/assemblers/clinical_assembler.py CONFIDENCE_FLOOR = 0.70
+    #   scripts/build_scenarios_xlsx.py                 CONFIDENCE_FLOOR = 0.70
+    # NOTE — the four extractors do NOT use 0.70. They import
+    #   CONFIDENCE_FLOOR = 0.6 from core/documents/extractors/base.py
+    #   (xray, perio, clinical_note, pred_letter). That 0.6/0.70 split is a
+    #   real, still-open inconsistency inside dental-simulator; 0.70 is chosen
+    #   here because clinical_assembler.py is what actually gates evidence into
+    #   pred_states, and pred_states is what this decision reads.
+    # DA-M05 "Low-Confidence Scanned Extraction" is the case that exercises it:
+    #   PA X-ray scores 0.45 deterministic → below both floors → Claude
+    #   ai_vision fallback fires in the indexer, and the extractor returns
+    #   max(deterministic, ai_conf). The accompanying clinical note scores 0.72
+    #   — above 0.70, below nothing — and is accepted as deterministic.
     boundary:
       recommend_if:
         - all required documents present
         - all documents within required timeframes
-        - confidence_score >= 0.60 on all extractions
+        - confidence_score >= 0.70 on all extractions
       escalate_if:
-        - document present but confidence_score < 0.60
+        - document present but confidence_score < 0.70 (routes to ai_vision fallback)
         - document present but older than allowed window
       block_if:
         - required document missing entirely
@@ -435,7 +450,7 @@ decisions:
     contamination_guard:
       fail_if_any_upstream_blocked: true
 
-  # ══ WAVE 4 — DEPENDS ON WAVE 3 ═════════════════════════
+  # == WAVE 4 — DEPENDS ON WAVE 3 =========================
 
   - id: pre_d_assessment
     name: Pre-D assessment
@@ -456,7 +471,7 @@ decisions:
       - payer_rules
       - ada_guidelines
       - conditions_library
-    persona: PreDAssessmentAgent
+    persona: pre_d_assessment
     mode: human_approval
     risk_level: high
     owner_team: billing
@@ -497,7 +512,7 @@ decisions:
     contamination_guard:
       fail_if_any_upstream_blocked: true
 
-  # ══ WAVE 5 — POST-SUBMISSION + PORTFOLIO ═══════════════
+  # == WAVE 5 — POST-SUBMISSION + PORTFOLIO ===============
 
   - id: appeal_specialist
     name: Appeal specialist
@@ -517,7 +532,7 @@ decisions:
       - payer_rules
       - ada_guidelines
       - conditions_library
-    persona: AppealSpecialist
+    persona: appeal_specialist
     mode: human_approval
     risk_level: high
     owner_team: billing
@@ -574,7 +589,7 @@ decisions:
       - pred_state
       - payer_rules
       - conditions_library
-    persona: DSOPortfolioManager
+    persona: dso_portfolio_manager
     mode: recommend
     risk_level: low
     owner_team: dso_manager
