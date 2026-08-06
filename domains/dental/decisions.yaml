@@ -1,0 +1,651 @@
+# ============================================================
+# Accord Dental OS — Dental Domain Pack
+# decisions.yaml — source of truth for all dental decisions
+# ============================================================
+# Each decision defines:
+#   - its data requirements (own vs shared)
+#   - dependencies on other decisions (wave order)
+#   - the agent persona assigned to it
+#   - the decision mode (recommend / human_approval)
+#   - the boundary (what is recommended, escalated, blocked)
+#   - the signals it emits into pred_states
+#
+# DIVERGENCE FROM domains/lending/decisions.yaml — READ THIS FIRST
+#   1. There is NO `automate_if` clause and NO `auto_execute` mode
+#      anywhere in this file. In lending, `automate_if` is the ALLOW
+#      clause and the agent writes back on its own. In dental, AI
+#      decides nothing: the policy engine (dental-simulator) already
+#      decided, and dental-os explains why and tells a human what to
+#      do next. `recommend_if` is the highest outcome a dental
+#      decision can reach.
+#   2. Boundary precedence is therefore:
+#          BLOCK > ESCALATE > RECOMMEND
+#      (lending: BLOCK > ESCALATE > RECOMMEND > ALLOW)
+#   3. Every decision carries `wave` and `signals_emitted`, which
+#      lending does not have. Waves replace lending's
+#      parallel_independent / sequential_dependent split with an
+#      explicit 5-wave execution order.
+#
+# DECISION COUNT — 9, NOT 8
+#   dental-simulator PRD §14 defines 8 AI personas. This file defines
+#   NINE decisions: those 8 plus `pre_d_assessment`, the Wave 4
+#   synthesis step that has no persona in the simulator. It is the
+#   dental equivalent of lending's `underwriting_decision` and it is
+#   load-bearing — `appeal_specialist` depends on it, and it is the
+#   only place where a human signs off on the whole packet before
+#   submission. Anywhere this repo says "8 decisions", read it as
+#   "8 simulator personas + the pre-D synthesis".
+# ============================================================
+
+domain: dental
+version: "1.0.0"
+description: >
+  Dental pre-determination intelligence — 9 decisions (the 8
+  dental-simulator personas plus the pre_d_assessment synthesis)
+  from eligibility check through appeal generation. Independent
+  decisions run first in Wave 1; dependent decisions receive
+  enriched context from upstream waves.
+  AI DECIDES NOTHING. All decisions are recommend or
+  human_approval. Policy engine (dental-simulator) already
+  decided. dental-os explains why and tells humans what
+  to do next.
+
+# ─────────────────────────────────────────────
+# RULE HIERARCHY — three layers, overlay always wins
+# ─────────────────────────────────────────────
+# The dental equivalent of lending's regulatory → agency → overlay
+# chain. Referenced by every `governed_by` block below.
+rule_hierarchy:
+  - layer: ada_guidelines
+    authority: clinical
+    precedence: 1
+    note: >
+      ADA clinical criteria. The clinical floor — a payer rule or a
+      tenant overlay may be stricter, never looser. Cannot be overridden.
+  - layer: payer_rules
+    authority: contractual
+    precedence: 2
+    note: >
+      Delta Dental / Cigna / MetLife / United Concordia coverage,
+      bundling, frequency and downgrade rules. Sourced from
+      coverage_rules + bundling_rules in dental-simulator.
+  - layer: tenant_overlay
+    authority: practice
+    precedence: 3
+    note: >
+      Suwanee Smiles practice exceptions. ALWAYS WINS over payer_rules.
+      Sourced from overlay_rules in dental-simulator.
+
+# ─────────────────────────────────────────────
+# SHARED DATA — available to all decisions
+# ─────────────────────────────────────────────
+# Source table in dental-simulator noted per entry.
+shared_data:
+  - pred_state            # pred_states — central computed table
+  - eligibility_profile   # eligibility_profiles (versioned)
+  - payer_rules           # coverage_rules + bundling_rules
+  - ada_guidelines        # ada_guidelines + clinical_criteria
+  - conditions_library    # condition codes + payer citations
+
+# ─────────────────────────────────────────────
+# DECISIONS
+# ─────────────────────────────────────────────
+decisions:
+
+  # ══ WAVE 1 — INDEPENDENT, RUN IN PARALLEL ══════════════
+
+  - id: eligibility_analyst
+    name: Eligibility analyst
+    atomic_tool: eligibility_analyst_tool
+    context_window_days: 365     # one benefit year — annual max + waiting period
+    type: independent
+    description: >
+      Verifies that the patient's coverage is active on the treatment
+      date and that the plan will pay anything at all for this case.
+      Reads the X12 271 eligibility profile for coverage_active,
+      annual_max_remaining, waiting periods, the missing tooth clause
+      and the implant exclusion flag, and cross-checks the member
+      identity against the insurance card on file.
+    own_data:
+      - eligibility_profile
+      - patient
+      - plan
+    shared_data:
+      - pred_state
+      - eligibility_profile
+      - payer_rules
+    persona: EligibilityAnalyst
+    mode: recommend
+    risk_level: medium
+    owner_team: front_desk
+    depends_on: []
+    boundary:
+      recommend_if:
+        - coverage_active == true
+        - waiting_period_met == true
+        - annual_max_remaining > 0
+      escalate_if:
+        - coordination_of_benefits == true
+        - member_id_mismatch detected
+      block_if:
+        - coverage_active == false
+        - expression: implant_covered == false AND cdt_code starts with D6
+          governed_by:
+            type: payer_rules
+            payer: delta_dental
+            rule_name: Implant Exclusion
+            citation: Delta Dental PPO plan exclusions — implant services
+            threshold_field: eligibility.implant_covered
+    sla_seconds: 3
+    wave: 1
+    signals_emitted:
+      - ELIGIBILITY_VERIFIED
+      - ELIG_WAITING_PERIOD_NOT_MET
+      - ELIG_ANNUAL_MAX_EXCEEDED
+      - ELIG_MISSING_TOOTH_CLAUSE
+      - ELIG_COB_REQUIRED
+      - ELIG_IMPLANTS_NOT_COVERED
+      - ELIG_FREQUENCY_EXCEEDED
+    trace_required: true
+
+  - id: provider_credentialing
+    name: Provider credentialing
+    atomic_tool: provider_credentialing_tool
+    context_window_days: 180     # credentialing re-attestation cycle
+    type: independent
+    description: >
+      Validates the treating provider before anything is submitted under
+      their NPI. Reads the providers table and verifies the NPI against
+      NPPES, checks the OIG LEIE exclusion list, confirms network status
+      for this payer, and checks that the provider's specialty matches
+      the procedures billed. An OIG exclusion is a hard stop — nothing
+      downstream may submit.
+    own_data:
+      - provider
+    shared_data:
+      - pred_state
+      - payer_rules
+    persona: ProviderCredentialingAgent
+    mode: human_approval
+    risk_level: high
+    owner_team: billing
+    depends_on: []
+    boundary:
+      recommend_if:
+        - nppes_verified == true
+        - oig_excluded == false
+        - network_status == in_network
+      escalate_if:
+        - network_status == out_of_network
+        - nppes_verified == false
+      block_if:
+        - expression: oig_excluded == true
+          governed_by:
+            type: regulatory_rules
+            authority: oig
+            rule_name: LEIE Exclusion — no federal healthcare payment
+            citation: 42 CFR 1001.1901(b)
+    sla_seconds: 30
+    wave: 1
+    signals_emitted:
+      - PROVIDER_VERIFIED
+      - PROVIDER_OIG_EXCLUDED
+      - PROVIDER_NPI_INVALID
+      - PROVIDER_OUT_OF_NETWORK
+      - PROVIDER_SPECIALTY_MISMATCH
+    trace_required: true
+
+  - id: fraud_integrity
+    name: Fraud and integrity
+    atomic_tool: fraud_integrity_tool
+    context_window_days: 1825    # 5 years — frequency-gaming needs the full lookback
+    type: independent
+    description: >
+      Runs the integrity detectors across the billed procedure lines and
+      the clinical evidence that supports them. Reads procedure_lines,
+      clinical_evidence and the typed evidence_edges (confirms /
+      corroborates / contradicts) to surface upcoding, phantom
+      procedures, unbundling, frequency gaming and surface conflicts
+      between what was billed and what the chart shows. Surfaces the
+      mismatch; the billing manager decides whether it is fraud.
+    own_data:
+      - procedure_lines
+      - clinical_evidence
+      - evidence_edges
+    shared_data:
+      - pred_state
+      - payer_rules
+      - conditions_library
+    persona: FraudIntegrityAgent
+    mode: human_approval
+    risk_level: high
+    owner_team: billing
+    depends_on: []
+    boundary:
+      recommend_if:
+        - no anomalies detected across all detectors
+      escalate_if:
+        - surface_conflict detected
+        - frequency_gaming detected (within 30 days of limit)
+      block_if:
+        - upcoding AND phantom_procedure both detected
+        - waived_copay signal present
+    sla_seconds: 60
+    wave: 1
+    signals_emitted:
+      - INTEGRITY_VERIFIED
+      - FRAUD_UPCODING
+      - FRAUD_PHANTOM_PROCEDURE
+      - FRAUD_FREQUENCY_GAMING
+      - FRAUD_UNBUNDLING
+      - FRAUD_WAIVED_COPAY
+      - FRAUD_SURFACE_CONFLICT
+    trace_required: true
+
+  # ══ WAVE 2 — DEPENDS ON WAVE 1 ═════════════════════════
+
+  - id: coverage_analyst
+    name: Coverage analyst
+    atomic_tool: coverage_analyst_tool
+    context_window_days: 1825    # frequency limits run 1-per-5-years per tooth
+    type: dependent
+    description: >
+      Evaluates every billed CDT code against the payer's coverage,
+      bundling, frequency and downgrade rules for this specific plan.
+      Reads procedure_lines, the composed pred_state and the computed
+      cost_estimates, inheriting the verified eligibility disposition
+      from upstream. This is where the D7953-with-D6010 bundling
+      conflict is caught before submission rather than 14 days after.
+    own_data:
+      - procedure_lines
+      - pred_state
+      - cost_estimates
+    shared_data:
+      - pred_state
+      - payer_rules
+      - eligibility_profile
+    persona: CoverageAnalyst
+    mode: recommend
+    risk_level: medium
+    owner_team: billing
+    depends_on:
+      - decision: eligibility_analyst
+        required_output: eligibility_disposition
+        inherit_context: true
+    boundary:
+      recommend_if:
+        - all cdt_codes covered under plan
+        - no bundling conflicts
+      escalate_if:
+        - expression: soft bundling conflict (separable with documentation)
+          governed_by:
+            type: payer_rules
+            payer: delta_dental
+            rule_name: Bone Graft Not Separately Payable
+            citation: Delta Dental PPO policy D.7.4
+            threshold_field: coverage.bundling_separable
+        - downgrade applies (inform patient)
+      block_if:
+        - expression: hard bundling (D2950 + crown same date)
+          governed_by:
+            type: payer_rules
+            payer: delta_dental
+            rule_name: Core Buildup Not Separately Payable
+            citation: Delta Dental PPO policy D.4.3 / D.4.4
+            threshold_field: coverage.bundling_separable
+        - implants_excluded AND cdt starts with D6
+    sla_seconds: 30
+    wave: 2
+    signals_emitted:
+      - COVERAGE_VERIFIED
+      - COVERAGE_PRED_REQUIRED
+      - COVERAGE_BUNDLING_CONFLICT
+      - COVERAGE_DOWNGRADE_APPLIED
+      - COVERAGE_FREQUENCY_EXCEEDED
+      - COVERAGE_IMPLANTS_EXCLUDED
+      - COVERAGE_MISSING_TOOTH
+      - COVERAGE_WAITING_PERIOD
+    trace_required: true
+    contamination_guard:
+      reject_if_upstream_confidence_below: 0.75
+
+  - id: clinical_reviewer
+    name: Clinical reviewer
+    atomic_tool: clinical_reviewer_tool
+    context_window_days: 365     # X-ray currency window is 12 months
+    type: dependent
+    description: >
+      Scores the clinical evidence against the ADA criteria checklist for
+      each billed procedure. Reads clinical_evidence (PA X-ray bone loss,
+      perio pocket depths, CBCT bone volume, the SOAP narrative) and the
+      composed pred_state criteria_score, inheriting the credentialing
+      disposition from upstream. Surfaces the measurement against the
+      threshold — Dr. Chinta confirms clinical necessity.
+    own_data:
+      - clinical_evidence
+      - pred_state
+    shared_data:
+      - pred_state
+      - ada_guidelines
+      - conditions_library
+    persona: ClinicalReviewer
+    mode: recommend
+    risk_level: medium
+    owner_team: dentist
+    depends_on:
+      - decision: provider_credentialing
+        required_output: credentialing_disposition
+        inherit_context: true
+    boundary:
+      recommend_if:
+        - expression: criteria_score >= 0.85
+          governed_by:
+            type: ada_guidelines
+            guideline_name: Criteria Score — sufficient documentation
+            citation: ADA clinical criteria · dental-simulator PRD §11
+            threshold_field: clinical.auto_approve_threshold
+        - medical_necessity_met == true
+        - no medical_history_flags
+      escalate_if:
+        - criteria_score >= 0.50 AND criteria_score < 0.85
+        - medical_history_flag present (bisphosphonate, pregnancy)
+        - image_quality == SUBOPTIMAL
+      block_if:
+        - expression: criteria_score < 0.30
+          governed_by:
+            type: ada_guidelines
+            guideline_name: Criteria Score — insufficient documentation
+            citation: ADA clinical criteria · dental-simulator PRD §11
+            threshold_field: clinical.auto_deny_threshold
+        - expression: absolute_contraindication present (BISPHOS_IV + implant)
+          governed_by:
+            type: ada_guidelines
+            guideline_name: MRONJ Risk — IV bisphosphonate contraindication
+            citation: ADA/AAOMS position paper on medication-related ONJ
+            threshold_field: clinical.medical_history_flags
+    sla_seconds: 60
+    wave: 2
+    signals_emitted:
+      - CLINICAL_CRITERIA_MET
+      - CLINICAL_CRITERIA_NOT_MET
+      - CLINICAL_NARRATIVE_MISSING
+      - CLINICAL_MEDICAL_HISTORY_FLAG
+      - CLINICAL_XRAY_REQUIRED
+      - CLINICAL_CBCT_RECOMMENDED
+      - CLINICAL_IMAGE_QUALITY_LOW
+    trace_required: true
+    contamination_guard:
+      fail_if_any_upstream_blocked: true
+
+  # ══ WAVE 3 — DEPENDS ON WAVE 2 ═════════════════════════
+
+  - id: documentation_reviewer
+    name: Documentation reviewer
+    atomic_tool: documentation_reviewer_tool
+    context_window_days: 365     # covers the 12-month X-ray and 6-month perio windows
+    type: dependent
+    description: >
+      Answers one question: is the packet complete enough to submit?
+      Reads clinical_evidence and the billed cdt_codes, and inherits the
+      coverage and clinical dispositions to know which documents this
+      specific case actually requires. Checks presence, currency and
+      extraction confidence for every required document, and flags a
+      member ID that disagrees between the insurance card and the X12 271.
+    own_data:
+      - clinical_evidence
+      - cdt_codes
+    shared_data:
+      - pred_state
+      - conditions_library
+      - ada_guidelines
+    persona: DocumentationReviewer
+    mode: recommend
+    risk_level: medium
+    owner_team: front_desk
+    depends_on:
+      - decision: coverage_analyst
+        required_output: coverage_disposition
+        inherit_context: true
+      - decision: clinical_reviewer
+        required_output: criteria_score
+        inherit_context: true
+    boundary:
+      recommend_if:
+        - all required documents present
+        - all documents within required timeframes
+        - confidence_score >= 0.60 on all extractions
+      escalate_if:
+        - document present but confidence_score < 0.60
+        - document present but older than allowed window
+      block_if:
+        - required document missing entirely
+        - member_id_mismatch between card and X12 271
+    sla_seconds: 30
+    wave: 3
+    signals_emitted:
+      - DOCUMENTATION_COMPLETE
+      - DOC_XRAY_MISSING
+      - DOC_XRAY_TOO_OLD
+      - DOC_PERIO_CHART_MISSING
+      - DOC_NARRATIVE_MISSING
+      - DOC_CBCT_REQUIRED
+      - DOC_MEDICAL_CLEARANCE_NEEDED
+      - DOC_MEMBER_ID_MISMATCH
+    trace_required: true
+    contamination_guard:
+      fail_if_any_upstream_blocked: true
+
+  # ══ WAVE 4 — DEPENDS ON WAVE 3 ═════════════════════════
+
+  - id: pre_d_assessment
+    name: Pre-D assessment
+    atomic_tool: pre_d_assessment_tool
+    context_window_days: 365
+    type: dependent
+    description: >
+      Synthesizes all Wave 1-3 outputs into a final submission
+      readiness assessment. This is the dental equivalent of
+      underwriting_decision. Always human_approval — billing
+      coordinator reviews all conditions before submitting.
+    own_data:
+      - pred_state
+      - pred_condition_instances
+      - cost_estimates
+    shared_data:
+      - pred_state
+      - payer_rules
+      - ada_guidelines
+      - conditions_library
+    persona: PreDAssessmentAgent
+    mode: human_approval
+    risk_level: high
+    owner_team: billing
+    depends_on:
+      - decision: eligibility_analyst
+        required_output: eligibility_disposition
+        inherit_context: true
+      - decision: coverage_analyst
+        required_output: coverage_disposition
+        inherit_context: true
+      - decision: clinical_reviewer
+        required_output: criteria_score
+        inherit_context: true
+      - decision: documentation_reviewer
+        required_output: documentation_disposition
+        inherit_context: true
+    boundary:
+      recommend_if:
+        - all upstream waves returned recommend
+        - no open conditions
+        - criteria_score >= 0.70
+      escalate_if:
+        - any upstream escalated
+        - open conditions exist but are resolvable
+      block_if:
+        - any upstream blocked
+        - PROVIDER_OIG_EXCLUDED present
+        - any FRAUD_* signal present
+    sla_seconds: 300
+    wave: 4
+    signals_emitted:
+      - PRED_READY_TO_SUBMIT
+      - PRED_CONDITIONS_OPEN
+      - PRED_BLOCKED_FRAUD
+      - PRED_BLOCKED_CLINICAL
+      - PRED_BLOCKED_PROVIDER
+    trace_required: true
+    contamination_guard:
+      fail_if_any_upstream_blocked: true
+
+  # ══ WAVE 5 — POST-SUBMISSION + PORTFOLIO ═══════════════
+
+  - id: appeal_specialist
+    name: Appeal specialist
+    atomic_tool: appeal_specialist_tool
+    context_window_days: 180     # appeal deadlines run 60-180 days from denial
+    type: dependent
+    description: >
+      Only runs when payer_response.decision == denied or pended.
+      Analyzes the denial reason, estimates appeal viability,
+      and generates the appeal packet. Always human_approval —
+      Dr. Chinta and billing decide whether to appeal.
+    own_data:
+      - payer_responses
+      - pred_audit_log
+    shared_data:
+      - pred_state
+      - payer_rules
+      - ada_guidelines
+      - conditions_library
+    persona: AppealSpecialist
+    mode: human_approval
+    risk_level: high
+    owner_team: billing
+    depends_on:
+      - decision: pre_d_assessment
+        required_output: submission_readiness
+        inherit_context: true
+    boundary:
+      recommend_if:
+        - denial_reason_code maps to known appeal path
+        - appeal_deadline > 14 days
+        - viability_score > 0.40
+      escalate_if:
+        - appeal_deadline <= 14 days (deadline warning)
+        - viability_score 0.20-0.40
+      block_if:
+        - expression: hard exclusion (implants_not_covered = not appealable)
+          governed_by:
+            type: payer_rules
+            payer: delta_dental
+            rule_name: Plan Exclusion — not an appealable determination
+            citation: Delta Dental PPO plan exclusions — implant services
+            threshold_field: appeal.excluded_not_appealable
+        - appeal_deadline passed
+    sla_seconds: 120
+    wave: 5
+    signals_emitted:
+      - APPEAL_VIABLE
+      - APPEAL_NOT_VIABLE
+      - APPEAL_DEADLINE_WARNING
+      - APPEAL_PACKET_READY
+      - APPEAL_SUBMITTED
+    trace_required: true
+    contamination_guard:
+      fail_if_any_upstream_blocked: true
+
+  - id: dso_portfolio_manager
+    name: DSO portfolio manager
+    atomic_tool: dso_portfolio_manager_tool
+    context_window_days: 365
+    # Independent by type but scheduled in wave 5: it reads the aggregate
+    # AFTER individual cases have settled, and it never gates one of them.
+    type: independent
+    description: >
+      Cross-location portfolio analytics. Reads all pred_states
+      and payer_responses to surface denial patterns, revenue
+      at risk, and training recommendations. Advisory only —
+      never blocks individual pre-D decisions.
+    own_data:
+      - pred_states aggregate
+      - cost_estimates aggregate
+      - payer_responses aggregate
+    shared_data:
+      - pred_state
+      - payer_rules
+      - conditions_library
+    persona: DSOPortfolioManager
+    mode: recommend
+    risk_level: low
+    owner_team: dso_manager
+    depends_on: []     # reads aggregate, not upstream
+    boundary:
+      recommend_if:
+        - always     # purely advisory — no gating conditions
+      escalate_if: []
+      block_if: []    # MUST stay empty — see hard rule portfolio_never_blocks_a_case
+    sla_seconds: 180
+    wave: 5
+    signals_emitted:
+      - PORTFOLIO_DENIAL_PATTERN
+      - PORTFOLIO_REVENUE_AT_RISK
+      - PORTFOLIO_PAYER_PERFORMANCE
+      - PORTFOLIO_TRAINING_NEEDED
+    trace_required: true
+
+# ─────────────────────────────────────────────
+# DECISION EXECUTION ORDER — 5 WAVES
+# ─────────────────────────────────────────────
+# Everything inside a wave runs in parallel. A wave starts only when
+# the previous wave has settled.
+execution_order:
+  wave_1:                        # independent — no upstream context
+    - eligibility_analyst
+    - provider_credentialing
+    - fraud_integrity
+  wave_2:
+    - coverage_analyst           # needs: eligibility_analyst
+    - clinical_reviewer          # needs: provider_credentialing
+  wave_3:
+    - documentation_reviewer     # needs: coverage_analyst + clinical_reviewer
+  wave_4:
+    - pre_d_assessment           # needs: all of waves 1-3
+  wave_5:
+    - appeal_specialist          # needs: pre_d_assessment; runs only on denied/pended
+    - dso_portfolio_manager      # aggregate only; no upstream dependency
+
+# ─────────────────────────────────────────────
+# HARD RULES — apply across all decisions
+# ─────────────────────────────────────────────
+hard_rules:
+  - no_decision_without_owner
+  - no_action_without_policy
+  - no_context_without_lineage
+  - no_agent_without_permissions
+  - no_execution_without_trace
+  - ai_never_auto_executes                  # no auto_execute mode exists in this domain
+  - no_query_without_tenant_scope           # every read SETs app.tenant_id — RLS is FORCE
+  - no_citation_without_source              # every cited rule traces to a catalogue row
+  - provider_exclusion_stops_submission     # OIG excluded → nothing downstream submits
+  - fraud_block_stops_submission            # any FRAUD_* block halts pre_d_assessment
+  - upstream_block_propagates_to_dependents # contamination_guard on every dependent
+  - portfolio_never_blocks_a_case           # dso_portfolio_manager is advisory only
+
+# ─────────────────────────────────────────────
+# REFLECTION — agent learning from human overrides
+# ─────────────────────────────────────────────
+# When Dr. Chinta or the billing coordinator overrides a recommendation,
+# capture the reason and replay it to the same agent the next time it
+# sees a similar case. This is how the system improves without
+# retraining: the override log becomes a per-agent memory the boundary
+# engine consults.
+reflection:
+  trigger: human_override
+  extract:
+    - override_reason
+    - override_reason_code
+    - reviewer_role
+    - original_ai_recommendation
+  store_as: agent_learning
+  feed_back_to: same_agent_next_similar_event
+  retention_days: 365
