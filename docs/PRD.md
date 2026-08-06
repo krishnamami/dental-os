@@ -519,7 +519,7 @@ Carried forward from `dental-simulator`, deliberately.
 | 3 | Appeal generation — table, no logic | open |
 | 4 | `coverage_rules` breadth | **CLOSED** — 543 rows |
 | 4a | Coverage *provenance* — 14 of 181 codes traced to a manual | open |
-| 5 | Two `CONFIDENCE_FLOOR` constants | half-closed |
+| 5 | Two confidence thresholds — different questions | **CLOSED** — renamed |
 | 6 | `dental_scenarios.xlsx` churn | cosmetic |
 
 ### 1. Readiness flags not wired in `dental-simulator`
@@ -607,52 +607,41 @@ And on the fee side — see the note under `refresh_fee_schedules.py` — **only
 Georgia's 66 SPA-adjusted rows trace to a government document.** The other six
 states are GA amounts times a judgement multiplier.
 
-### 5. `dental-simulator` has TWO different `CONFIDENCE_FLOOR` constants
+### 5. Two confidence thresholds — different questions
 
-**Status: half-closed.** `dental-os` picked a side; `dental-simulator` still
-disagrees with itself.
+**Status: CLOSED.** Not a bug and never was one. There are two thresholds
+because there are two questions, and they are now named for the question each
+one answers.
 
-There is no single confidence floor in the simulator. There are two, and which
-one applies depends on which layer of the pipeline is asking:
+| Constant | Value | Question it answers | What it does |
+|---|---|---|---|
+| `AI_FALLBACK_FLOOR` | `0.6` | *Is this bad enough Claude should look at it?* | Triggers Claude Vision re-extraction |
+| `TRUST_FLOOR` | `0.70` | *Is this good enough to base a decision on?* | Gates evidence into `pred_states` |
 
-| Constant | Value | Files |
-|---|---|---|
-| **Extraction floor** — when to spend a Claude token | `0.6` | `core/documents/extractors/base.py:21`, imported by `xray_extractor.py`, `perio_extractor.py`, `clinical_note_extractor.py`, `pred_letter_extractor.py` |
-| **Ingestion floor** — when a value is trustworthy enough to use | `0.70` | `core/ingestion/adapters/pdf_adapter.py:9`, `domains/dental/assemblers/clinical_assembler.py:10`, `scripts/build_scenarios_xlsx.py:118` |
+`AI_FALLBACK_FLOOR` lives in `dental-simulator`
+`core/documents/extractors/base.py:21`, imported by `xray_extractor.py`,
+`perio_extractor.py`, `clinical_note_extractor.py` and
+`pred_letter_extractor.py`. `TRUST_FLOOR` lives in
+`core/ingestion/adapters/pdf_adapter.py`,
+`domains/dental/assemblers/clinical_assembler.py` and
+`scripts/build_scenarios_xlsx.py`.
 
-> **If you opened `base.py` expecting `0.70` and found `0.6`, this is why.**
-> Neither value is a typo and neither is wrong on its own — they answer
-> different questions. `0.6` is "is this bad enough that Claude should look at
-> it?" `0.70` is "is this good enough to base a decision on?" The bug is that
-> nothing in either repo says so, so the two read as one constant that
-> disagrees with itself.
+**`dental-os` uses `TRUST_FLOOR = 0.70`.** `clinical_assembler.py` is what
+gates evidence into `pred_states`, and `pred_states` is the only thing these
+decisions read, so 0.70 is the only floor `documentation_reviewer` and
+`decisions.yaml` are written against.
 
-**The consequence** is the band between them. A document scoring **0.65** is
-*fine* to the extractor — good enough that the Claude fallback never fires — and
-simultaneously *requires verification* to `pdf_adapter.py`, which stamps
-`requires_verification=True` and `extraction_method=ai_vision` on a value no AI
-ever touched. The same number, the same document, two verdicts.
+**The band between them is real and is intended.** A document scoring **0.65**
+passes `AI_FALLBACK_FLOOR` — Claude never sees it — but fails `TRUST_FLOOR`, so
+`pdf_adapter.py` stamps `requires_verification=True`. Same document, same
+score, two verdicts. That is the correct answer to two different questions, not
+a disagreement between two copies of one constant.
 
-**What `dental-os` did about it:** `documentation_reviewer` is written against
-**0.70**, and `decisions.yaml` carries a comment block at that boundary naming
-both constants and both file sets. 0.70 is the right side to land on here
-because `clinical_assembler.py` is what gates evidence into `pred_states`, and
-`pred_states` is the only thing this decision reads. So `dental-os` no longer
-disagrees with the assembler.
-
-**What is still open:** the split itself, which lives entirely in
-`dental-simulator`. Fixing it is a small change and a naming decision, not a
-refactor:
-
-1. Rename to say what each one means — `AI_FALLBACK_FLOOR = 0.6` and
-   `TRUST_FLOOR = 0.70` — so the two can never again be read as one value.
-2. Or collapse to a single constant and accept the cost: raising the extraction
-   floor to 0.70 sends more documents to Claude (every 0.6–0.7 document now
-   costs a token); lowering the trust floor to 0.6 admits weaker extractions
-   into `pred_states` and moves `documentation_reviewer`'s boundary with it.
-
-Until one of those happens, **do not assume a `CONFIDENCE_FLOOR` you find in
-`dental-simulator` is the one this PRD means.** Check which file it came from.
+**Resolution:** renamed from the single overloaded `CONFIDENCE_FLOOR` to
+`AI_FALLBACK_FLOOR` / `TRUST_FLOOR` in `dental-simulator` — commit `89cb834`
+*"fix: close Gap #5 + Gap #6"*. Each declaration now carries a comment naming
+its counterpart and the question it answers. No `CONFIDENCE_FLOOR` remains in
+either repo; if you find one, it predates that commit.
 
 ### 6. One smaller one worth carrying
 
