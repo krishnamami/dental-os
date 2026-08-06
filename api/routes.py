@@ -239,6 +239,49 @@ def _waves_from_outputs(outputs: list[dict]) -> dict[str, list[DecisionOutput]]:
     return waves
 
 
+async def _readiness_flags(
+    request: Request, pred_request_id: str, tenant: str
+) -> Optional[dict]:
+    """The engine's 14 readiness booleans for one pre-D.
+
+    Read LIVE from dental-simulator's pred_states rather than from the
+    persona bundle, for two reasons:
+
+      1. readiness_flags is upstream state. It is recomputed by
+         compute_readiness.py whenever evidence lands, independently of
+         any persona run, so the bundle's copy can be stale while the
+         engine's is current.
+      2. Bundles written before this change carry no readiness at all.
+         Reading live means 50 existing bundles did not have to be
+         re-run to gain the field.
+
+    A pre-D with no row, or with readiness never computed, returns None
+    — NOT an empty dict. "The engine has not scored this" and "the
+    engine scored this and every flag failed" are different answers and
+    the client renders them differently.
+    """
+    sim, _ = _pools(request)
+    try:
+        rows = await fetch_with_tenant(
+            sim, tenant,
+            "SELECT readiness_flags FROM pred_states WHERE pred_request_id = $1",
+            pred_request_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — readiness must not 500 the bundle
+        logger.warning("readiness read failed for %s: %s", pred_request_id, exc)
+        return None
+    if not rows:
+        return None
+
+    # asyncpg returns JSONB as str on this pool (no codec registered).
+    flags = _json(rows[0].get("readiness_flags"), None)
+    if not isinstance(flags, dict) or not flags:
+        return None
+    # Coerce to bool: the column is the engine's, but a client typed
+    # against dict[str, bool] should not receive a stray null.
+    return {k: bool(v) for k, v in flags.items()}
+
+
 def _open_condition_codes(signals: list[dict]) -> list[str]:
     """Signal codes that need somebody to do something.
 
@@ -311,6 +354,10 @@ async def get_decision_bundle(
         s.get("signal_code") == "PRED_READY_TO_SUBMIT" for s in all_signals
     )
 
+    flags = await _readiness_flags(request, pred_request_id, tenant)
+    met = sum(1 for v in flags.values() if v) if flags else None
+    total = len(flags) if flags else None
+
     return DecisionBundleResponse(
         pred_request_id=pred_request_id,
         patient_name=snapshot.get("patient_name") or "",
@@ -332,6 +379,12 @@ async def get_decision_bundle(
         bundle_id=str(bundle["bundle_id"]),
         processed_at=_iso(bundle.get("completed_at")),
         computed=computed,
+        readiness_flags=flags,
+        readiness_met=met,
+        readiness_total=total,
+        readiness_score=(
+            round(met / total, 3) if met is not None and total else None
+        ),
     )
 
 

@@ -89,9 +89,37 @@ async def main() -> int:
             sorted(data["waves"])
         assert sum(len(v) for v in data["waves"].values()) == 9
         assert data["computed"] is False, "expected the fast path"
+        # ── readiness_flags — the engine's 14, not an inference ──────
+        # Key names are dental-simulator's own. They are NOT the
+        # plain-English labels a screen shows, and asserting the pretty
+        # names here would have passed against a hand-written dict while
+        # failing against the engine.
+        flags = data["readiness_flags"]
+        assert flags is not None, "readiness_flags missing from the response"
+        assert isinstance(flags, dict), type(flags)
+        assert len(flags) == 14, sorted(flags)
+        assert all(isinstance(v, bool) for v in flags.values()), flags
+        for key in ("eligibility_verified", "provider_verified",
+                    "bundling_reviewed", "xray_present",
+                    "clinical_note_present", "no_fraud_signals"):
+            assert key in flags, sorted(flags)
+        assert flags["eligibility_verified"] is True, flags
+        # DA-A01 is the bundling case: D7953 bundles into D6010 and the
+        # graft is not separately payable without a narrative. That one
+        # flag is why it cannot be submitted.
+        assert flags["bundling_reviewed"] is False, flags
+        assert data["readiness_met"] == 13, data["readiness_met"]
+        assert data["readiness_total"] == 14, data["readiness_total"]
+        assert data["readiness_score"] == 0.929, data["readiness_score"]
+        # The flags and the personas must agree about submittability.
+        assert data["submission_ready"] is False
         print(f"OK  /decisions/DA-A01  signals={len(signals)} "
               f"waves=5 decisions=9 bundle={data['bundle_id'][:8]} "
               f"fast_path={not data['computed']}")
+        print(f"OK  readiness_flags  {data['readiness_met']}/"
+              f"{data['readiness_total']} "
+              f"(only false: "
+              f"{', '.join(k for k, v in sorted(flags.items()) if not v)})")
 
         # ── T-34 conditions ──────────────────────────────────────────
         r = await client.get(f"{BASE}/decisions/PRED-SIM-DA-A01/conditions")

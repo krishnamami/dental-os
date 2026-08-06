@@ -86,6 +86,30 @@ class DecisionBundleResponse(BaseModel):
     # that already existed. Lets a caller tell a 40ms read from a 2s run.
     computed: bool = False
 
+    # ── Readiness (engine truth, not inference) ──────────────────────
+    # dental-simulator's readiness assembler writes these 14 booleans to
+    # pred_states.readiness_flags. Verified identical key set on all 50
+    # pre-Ds. THESE ARE THE ENGINE'S NAMES — do not rename them here to
+    # read better on a screen; a client that wants prose should map
+    # them, and a rename would silently break replay against a stored
+    # bundle.
+    #
+    #   annual_max_sufficient   deductible_known      downgrade_noted
+    #   eligibility_verified    narrative_present     no_fraud_signals
+    #   pre_d_required_noted    provider_verified     waiting_period_met
+    #   frequency_limit_ok      bundling_reviewed     xray_present
+    #   perio_chart_present     clinical_note_present
+    readiness_flags: Optional[dict[str, bool]] = None
+    # Satisfied / total, counted from readiness_flags above.
+    #
+    # NOT an engine column. pred_states has readiness_flags and
+    # submission_ready and nothing else — there is no readiness_score to
+    # read, so this is arithmetic over the engine's own booleans rather
+    # than a second opinion about them.
+    readiness_met: Optional[int] = None
+    readiness_total: Optional[int] = None
+    readiness_score: Optional[float] = None
+
 
 # ─────────────────────────────────────────────────────────────────────
 # T-34 — GET /decisions/{id}/conditions
