@@ -21,4 +21,55 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        /**
+         * Vendor splitting only. The APPLICATION split is done with
+         * React.lazy() in App.tsx, not here — a route's chunk should be
+         * defined by the import that reaches it, so adding a page
+         * cannot silently land it in the landing-page bundle.
+         *
+         * Function form rather than the object form: object entries are
+         * matched against resolved module ids, and a relative path like
+         * "./src/pages/lp/LandingPage" does not match the absolute id
+         * rolldown actually sees. It fails silently — you get one chunk
+         * and no error.
+         *
+         * The groups are split on how often they change:
+         *   vendor-react   react + react-dom, upgrades only
+         *   vendor-router  react-router, moves independently of React
+         *   vendor-query   data layer
+         *   vendor-icons   lucide, imported by 27 components
+         *   vendor         everything else (axios today)
+         * Each gets a stable hash, so a product deploy does not
+         * invalidate the framework a returning visitor already has.
+         *
+         * Router is separated from React rather than bundled with it
+         * for two reasons: it keeps every chunk under 200 KB raw, and
+         * react-router ships breaking majors far more often than React
+         * does — pinning them together would throw away a 180 KB cache
+         * entry on a router bump.
+         */
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/]react-router/.test(id)) {
+            return "vendor-router";
+          }
+          if (
+            /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)
+          ) {
+            return "vendor-react";
+          }
+          if (id.includes("@tanstack")) return "vendor-query";
+          if (id.includes("lucide-react")) return "vendor-icons";
+          return "vendor";
+        },
+      },
+    },
+    // Nothing should approach this once the split lands; leaving the
+    // limit high enough to be quiet but low enough to still shout if a
+    // chunk regresses.
+    chunkSizeWarningLimit: 250,
+  },
 });
