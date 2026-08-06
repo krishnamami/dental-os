@@ -45,6 +45,7 @@ DEFAULT_TENANT = "suwanee_smiles"
 
 _pool: Optional[asyncpg.Pool] = None
 _os_pool: Optional[asyncpg.Pool] = None
+_admin_pool: Optional[asyncpg.Pool] = None
 
 
 async def get_pool() -> asyncpg.Pool:
@@ -103,6 +104,56 @@ async def get_os_pool() -> asyncpg.Pool:
     return _os_pool
 
 
+async def get_admin_pool() -> asyncpg.Pool:
+    """Elevated read pool for cross-tenant aggregates.
+
+    ⚠ IT DOES NOT BYPASS RLS ON THIS DATABASE, and nothing in dental-os
+    should be written as though it does. Measured against the live RDS:
+
+        pred_requests / pred_states / cost_estimates
+            relrowsecurity = true, relforcerowsecurity = TRUE
+        dental_admin
+            rolsuper = false, rolbypassrls = FALSE
+
+    FORCE row-level security binds the table OWNER as well, and only a
+    superuser or a role holding BYPASSRLS escapes it. `dental_admin`
+    owns these tables and holds neither, so connecting as admin returns
+    exactly the same single-tenant slice as `dental_app` — while
+    handing the caller DDL rights it has no use for.
+
+    A cross-tenant aggregate therefore has to iterate tenants and set
+    app.tenant_id for each. That is what
+    DSOPortfolioManager.aggregate_all_tenants does, and it needs no
+    elevated credential at all.
+
+    This helper exists so the seam is named and configurable: if the
+    tables are ever moved off FORCE, or a BYPASSRLS reporting role is
+    created, the aggregate switches to a single query by pointing
+    DENTAL_ADMIN_DATABASE_URL at it. Until then it falls back to
+    DATABASE_URL and is functionally the read pool.
+
+    NEVER use this for per-patient reads. The aggregate view is the
+    only justification for an elevated role, and it is a weak one while
+    the fallback is the ordinary pool.
+    """
+    global _admin_pool
+    if _admin_pool is None:
+        dsn = os.environ.get("DENTAL_ADMIN_DATABASE_URL")
+        if not dsn:
+            # Deliberate fallback, not a silent downgrade: the aggregate
+            # works either way, so a missing admin DSN must not take the
+            # portfolio endpoint down.
+            dsn = os.environ.get("DATABASE_URL")
+        if not dsn:
+            raise RuntimeError(
+                "Neither DENTAL_ADMIN_DATABASE_URL nor DATABASE_URL is set."
+            )
+        _admin_pool = await asyncpg.create_pool(
+            dsn=dsn, min_size=1, max_size=3, command_timeout=30,
+        )
+    return _admin_pool
+
+
 async def execute_os_with_tenant(
     pool: asyncpg.Pool,
     tenant_id: str,
@@ -126,13 +177,16 @@ async def execute_os_with_tenant(
 
 
 async def close_pool() -> None:
-    global _pool, _os_pool
+    global _pool, _os_pool, _admin_pool
     if _pool is not None:
         await _pool.close()
         _pool = None
     if _os_pool is not None:
         await _os_pool.close()
         _os_pool = None
+    if _admin_pool is not None:
+        await _admin_pool.close()
+        _admin_pool = None
 
 
 async def fetch_with_tenant(

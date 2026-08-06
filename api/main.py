@@ -45,7 +45,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 SERVICE = "accord-dental-os"
 
 
@@ -92,14 +92,37 @@ async def health(request: Request) -> HealthResponse:
     sim_pool = getattr(request.app.state, "simulator_pool", None)
     os_pool = getattr(request.app.state, "os_pool", None)
 
-    scenarios = None
+    scenarios = tenant_count = payers = states = None
+    tenant_ids: list[str] = []
     simulator_db = "unavailable"
     if sim_pool is not None:
         try:
+            # pred_requests is RLS-scoped, so count(*) under one tenant
+            # returns THAT PRACTICE'S pre-Ds, not the deployment's. Sum
+            # across the tenant directory instead — otherwise /health
+            # would have reported 40 while 50 existed.
             rows = await fetch_with_tenant(
-                sim_pool, tenant, "SELECT count(*) AS n FROM pred_requests"
-            )
-            scenarios = rows[0]["n"]
+                sim_pool, tenant,
+                "SELECT tenant_id FROM tenants WHERE active ORDER BY tenant_id")
+            tenant_ids = [r["tenant_id"] for r in rows]
+            tenant_count = len(tenant_ids)
+
+            scenarios = 0
+            for t in tenant_ids:
+                got = await fetch_with_tenant(
+                    sim_pool, t,
+                    "SELECT count(*) AS n FROM pred_requests WHERE tenant_id = $1",
+                    t)
+                scenarios += got[0]["n"] if got else 0
+
+            # payers and fee_schedules are global catalogues — no
+            # tenant_id, no RLS — so one read covers the deployment.
+            got = await fetch_with_tenant(
+                sim_pool, tenant,
+                "SELECT (SELECT count(*) FROM payers) AS p,"
+                "       (SELECT count(DISTINCT state) FROM fee_schedules) AS s")
+            payers = got[0]["p"]
+            states = got[0]["s"]
             simulator_db = "connected"
         except Exception as exc:  # noqa: BLE001 — health never raises
             logger.warning("simulator probe failed: %s", exc)
@@ -109,13 +132,20 @@ async def health(request: Request) -> HealthResponse:
     os_db = "unavailable"
     if os_pool is not None:
         try:
-            rows = await execute_os_with_tenant(
-                os_pool, tenant,
-                "SELECT (SELECT count(*) FROM decision_outputs) AS d,"
-                "       (SELECT count(*) FROM persona_bundles)  AS p",
-            )
-            decision_outputs = rows[0]["d"]
-            persona_bundles = rows[0]["p"]
+            # decision_outputs and persona_bundles are FORCE RLS in the
+            # dental_os database too (migrations/002), so this has to sum
+            # per tenant for exactly the same reason as above. Falls back
+            # to the app default when the tenant directory was unreadable.
+            probe_tenants = tenant_ids if tenant_count else [tenant]
+            decision_outputs = persona_bundles = 0
+            for t in probe_tenants:
+                rows = await execute_os_with_tenant(
+                    os_pool, t,
+                    "SELECT (SELECT count(*) FROM decision_outputs) AS d,"
+                    "       (SELECT count(*) FROM persona_bundles)  AS p",
+                )
+                decision_outputs += rows[0]["d"]
+                persona_bundles += rows[0]["p"]
             os_db = "connected"
         except Exception as exc:  # noqa: BLE001
             logger.warning("os probe failed: %s", exc)
@@ -126,9 +156,12 @@ async def health(request: Request) -> HealthResponse:
         status="healthy" if healthy else "degraded",
         service=SERVICE,
         version=VERSION,
+        tenants=tenant_count,
         simulator_scenarios=scenarios,
         decision_outputs=decision_outputs,
         persona_bundles=persona_bundles,
+        payers_supported=payers,
+        states_supported=states,
         simulator_db=simulator_db,
         os_db=os_db,
     )

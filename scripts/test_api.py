@@ -54,10 +54,14 @@ async def main() -> int:
         assert r.status_code == 200, r.text
         h = r.json()
         assert h["status"] == "healthy", h
-        assert h["version"] == "0.2.0", h
+        assert h["version"] == "0.3.0", h
         assert h["simulator_db"] == "connected", h
         assert h["os_db"] == "connected", h
-        assert h["simulator_scenarios"] == 40, h
+        # 50 since Sprint 1 (Tampa + Dallas). /health sums per tenant
+        # because pred_requests is RLS-scoped — a single count(*) under
+        # the default tenant reported 40 while 50 existed.
+        assert h["simulator_scenarios"] == 50, h
+        assert h["tenants"] == 3, h
         assert h["decision_outputs"] >= MIN_DECISION_OUTPUTS, h
         assert h["persona_bundles"] >= MIN_PERSONA_BUNDLES, h
         print(f"OK  /health  scenarios={h['simulator_scenarios']} "

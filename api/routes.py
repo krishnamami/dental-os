@@ -46,8 +46,14 @@ from api.schemas import (
 from core.catalogue.context_enricher import ContextEnricher
 from core.context.context_builder import ContextBuilder
 from core.cron.runner import PersonaRunner
-from core.db.connection import DEFAULT_TENANT, execute_os_with_tenant
+from core.db.connection import (
+    DEFAULT_TENANT,
+    execute_os_with_tenant,
+    fetch_with_tenant,
+    get_admin_pool,
+)
 from core.resolvers import resolve_coverage
+from domains.dental.personas import DSOPortfolioManager
 from core.resolvers.appeal_viability_resolver import resolve_appeal_viability
 
 logger = logging.getLogger(__name__)
@@ -76,7 +82,59 @@ def _pools(request: Request) -> tuple[Any, Any]:
 
 
 def _tenant(request: Request) -> str:
+    """The app-level default. Used for dental-os's OWN tables, which are
+    written under whichever tenant owns the pre-D — see _tenant_for."""
     return getattr(request.app.state, "tenant_id", DEFAULT_TENANT)
+
+
+# pred_request_id -> tenant_id. Small, bounded (one entry per pre-D) and
+# immutable in practice: a pre-D never changes hands between practices.
+_TENANT_CACHE: dict[str, str] = {}
+
+
+async def _tenant_for(request: Request, pred_request_id: str) -> str:
+    """Which practice owns this pre-D.
+
+    Sprint 2. Before this, every route assumed suwanee_smiles, so a
+    Tampa pre-D read under the Suwanee tenant returned ZERO ROWS AND NO
+    ERROR — the RLS trap — and the API answered 404 for a pre-D that
+    plainly exists.
+
+    `pred_requests` is itself RLS-protected, so the lookup cannot simply
+    query for the tenant: you need the tenant to do the read. The
+    resolution is therefore to try each active practice in turn. That is
+    3 cheap indexed lookups worst case, cached thereafter.
+
+    `tenants` is the one table on this database with RLS disabled
+    (relrowsecurity = false) — it is a directory of practices, not
+    patient data — which is what makes enumerating them legal here.
+    """
+    if pred_request_id in _TENANT_CACHE:
+        return _TENANT_CACHE[pred_request_id]
+
+    sim, _ = _pools(request)
+    rows = await fetch_with_tenant(
+        sim, _tenant(request),
+        "SELECT tenant_id FROM tenants WHERE active ORDER BY tenant_id")
+    candidates = [r["tenant_id"] for r in rows] or [_tenant(request)]
+    # Try the app default first — 40 of 50 pre-Ds are Suwanee's.
+    default = _tenant(request)
+    if default in candidates:
+        candidates = [default] + [c for c in candidates if c != default]
+
+    for candidate in candidates:
+        found = await fetch_with_tenant(
+            sim, candidate,
+            "SELECT tenant_id FROM pred_requests WHERE pred_request_id = $1",
+            pred_request_id)
+        if found:
+            _TENANT_CACHE[pred_request_id] = found[0]["tenant_id"]
+            return _TENANT_CACHE[pred_request_id]
+
+    # Not found under any tenant. Return the default and let the caller's
+    # own lookup produce the 404 with its fuller message — resolving a
+    # tenant is not the right place to decide a pre-D does not exist.
+    return default
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -109,7 +167,7 @@ async def _build_context(request: Request, pred_request_id: str):
     exist, and both are "not found" to a caller.
     """
     sim, _ = _pools(request)
-    tenant = _tenant(request)
+    tenant = await _tenant_for(request, pred_request_id)
     try:
         context = await ContextBuilder(sim).build(pred_request_id, tenant)
     except LookupError as exc:
@@ -130,7 +188,7 @@ async def _read_current_bundle(
     keeps a re-run's rows from being merged with the previous run's.
     """
     _, os_pool = _pools(request)
-    tenant = _tenant(request)
+    tenant = await _tenant_for(request, pred_request_id)
 
     bundles = await execute_os_with_tenant(
         os_pool, tenant,
@@ -212,7 +270,10 @@ async def get_decision_bundle(
     it current; the prior one stays in the table as history.
     """
     sim, os_pool = _pools(request)
-    tenant = _tenant(request)
+    # Which practice owns this pre-D — NOT the app default. Building the
+    # runner with the wrong tenant makes ContextBuilder read zero rows
+    # and 404 a pre-D that exists.
+    tenant = await _tenant_for(request, pred_request_id)
 
     bundle, outputs = (None, [])
     if not refresh:
@@ -223,7 +284,10 @@ async def get_decision_bundle(
         # SLOW PATH — no bundle yet (or a forced refresh). Run the waves.
         runner = PersonaRunner(sim, os_pool, tenant)
         try:
-            await runner.run(pred_request_id)
+            # Passed explicitly as well as via the constructor: run()'s
+            # per-request override is the contract other callers use,
+            # and exercising it here keeps the two paths identical.
+            await runner.run(pred_request_id, tenant_id=tenant)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -641,7 +705,9 @@ async def post_feedback(
     backfilled.
     """
     _, os_pool = _pools(request)
-    tenant = _tenant(request)
+    # provider_feedback is RLS-scoped, so feedback on a Tampa pre-D must
+    # be written under Tampa or the policy's WITH CHECK rejects it.
+    tenant = await _tenant_for(request, pred_request_id)
 
     try:
         rows = await execute_os_with_tenant(
@@ -674,3 +740,103 @@ async def post_feedback(
         received_at=_iso(row["submitted_at"]) or "",
         expires_at=_iso(row.get("expires_at")),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Sprint 2 — GET /portfolio/summary
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _f(value: Any) -> float:
+    """Decimal | None -> float. JSON has no decimal type and asyncpg
+    returns NUMERIC as Decimal, which json cannot serialise."""
+    return float(value) if value is not None else 0.0
+
+
+@router.get("/portfolio/summary")
+async def portfolio_summary(request: Request) -> dict:
+    """Cross-tenant analytics — every practice in the DSO group.
+
+    THE ONLY CROSS-TENANT ENDPOINT in dental-os. Everything else answers
+    for one practice; this answers for the operator who owns several and
+    wants to know which one is leaking money.
+
+    It returns aggregates only — counts, rates and sums per practice. No
+    patient, no pre-D id, no signal. That is the line: a DSO manager is
+    entitled to know Tampa denies at 20%, and is not thereby entitled to
+    read a Tampa patient's chart.
+
+    On the admin pool: get_admin_pool() is used because that is the
+    named seam for this query, but it does NOT currently bypass RLS —
+    these tables are FORCE row-level security and dental_admin holds
+    neither BYPASSRLS nor superuser. aggregate_all_tenants therefore
+    iterates practices with app.tenant_id set per tenant, which works on
+    the ordinary pool too. See get_admin_pool()'s docstring.
+    """
+    try:
+        pool = await get_admin_pool()
+    except RuntimeError:
+        # No admin DSN configured — the read pool answers identically.
+        pool, _ = _pools(request)
+
+    data = await DSOPortfolioManager.aggregate_all_tenants(pool)
+    tenants = data["tenants"]
+
+    total_pre_ds = sum(t["total_pre_ds"] for t in tenants)
+    total_approved = sum(t["approved"] for t in tenants)
+    total_denied = sum(t["denied"] for t in tenants)
+    total_pended = sum(t["pended"] for t in tenants)
+    total_patient = sum(_f(t["total_patient"]) for t in tenants)
+
+    # Revenue at risk is what sits on pre-Ds that did NOT approve, not
+    # everything billed. Summing all patient responsibility would count
+    # an approved case's copay as money in danger.
+    at_risk = sum(
+        _f(t["total_patient"]) for t in tenants
+        if (t["denied"] or 0) + (t["pended"] or 0) > 0
+    )
+
+    # A practice with no cost_estimates rows reports NULL revenue, not
+    # zero. Naming them beats publishing a total that quietly omits them.
+    missing_costs = [
+        t["tenant_id"] for t in tenants if t["total_patient"] is None
+    ]
+
+    return {
+        "summary": {
+            "total_practices": len(tenants),
+            "total_pre_ds": total_pre_ds,
+            "total_approved": total_approved,
+            "total_denied": total_denied,
+            "total_pended": total_pended,
+            "overall_approval_rate": (
+                round(total_approved / total_pre_ds, 3) if total_pre_ds else 0
+            ),
+            "total_patient_responsibility": round(total_patient, 2),
+            "total_patient_revenue_at_risk": round(at_risk, 2),
+            "practices_missing_cost_estimates": missing_costs,
+        },
+        "practices": [
+            {
+                "tenant_id": t["tenant_id"],
+                "practice_name": t["practice_name"],
+                "address": t["address"],
+                "total_pre_ds": t["total_pre_ds"],
+                "approved": t["approved"],
+                "denied": t["denied"],
+                "pended": t["pended"],
+                "approval_rate": (
+                    round(t["approved"] / t["total_pre_ds"], 3)
+                    if t["total_pre_ds"] else 0
+                ),
+                "avg_criteria_score": _f(t["avg_score"]),
+                "total_contracted": _f(t["total_contracted"]),
+                "total_insurance_pays": _f(t["total_insurance"]),
+                "total_patient_pays": _f(t["total_patient"]),
+                "cost_estimates_available": t["total_patient"] is not None,
+            }
+            for t in tenants
+        ],
+        "top_denial_reasons": data["top_denial_reasons"],
+        "generated_at": data["generated_at"],
+    }

@@ -209,28 +209,43 @@ class PersonaRunner:
     ):
         self.simulator_pool = simulator_pool   # READ dental-simulator
         self.os_pool = os_pool                 # WRITE dental-os (RULE 15)
+        # The DEFAULT tenant. run() takes a per-request override, so one
+        # runner instance serves every practice — which is what the API
+        # needs, since it builds the runner once at startup and cannot
+        # know which tenant the next request is for.
         self.tenant_id = tenant_id
         self.builder = ContextBuilder(simulator_pool)
         self.enricher = ContextEnricher(simulator_pool)
-        # The portfolio aggregate is identical for every pre-D in a
-        # batch, so it is fetched once and reused. Without it
-        # dso_portfolio_manager degrades to PORTFOLIO_UNAVAILABLE.
-        self._portfolio_stats: Optional[dict] = None
+        # Portfolio aggregate cache, KEYED BY TENANT. vw_portfolio_context
+        # is tenant-scoped, so a single cached dict would have served
+        # Suwanee's 40-case portfolio to a Tampa pre-D — a
+        # cross-tenant data leak into a signal a human reads, not a
+        # cosmetic bug.
+        self._portfolio_stats: dict[str, dict] = {}
 
     # ── Public entry point ───────────────────────────────────────────
 
-    async def run(self, pred_request_id: str) -> dict:
+    async def run(
+        self, pred_request_id: str, tenant_id: Optional[str] = None
+    ) -> dict:
         """Run all waves for one pre-D.
 
         Returns the bundle of every signal from every persona, and
         writes decision_outputs + persona_bundles to the dental-os DB.
+
+        tenant_id overrides the runner's default for THIS request only.
+        Nothing is stored on self — a runner shared across concurrent
+        requests must not have a mutable current-tenant field, or two
+        overlapping pre-Ds from different practices would race and one
+        would be written under the other's tenant.
         """
         started = time.perf_counter()
+        tenant = tenant_id or self.tenant_id
 
         # STEP 1 — build + enrich. Both read-only, both tenant-scoped.
-        context = await self.builder.build(pred_request_id, self.tenant_id)
-        context = await self.enricher.enrich(context, self.tenant_id)
-        context.portfolio_stats = await self._load_portfolio_stats()
+        context = await self.builder.build(pred_request_id, tenant)
+        context = await self.enricher.enrich(context, tenant)
+        context.portfolio_stats = await self._load_portfolio_stats(tenant)
 
         all_signals: list[dict] = []
         wave_outputs: dict[str, dict] = {}
@@ -263,7 +278,7 @@ class PersonaRunner:
 
         # STEP 7 — decision_outputs, THEN persona_bundles (RULE 10).
         bundle_id = await self._write_outputs(
-            pred_request_id, wave_outputs, all_signals, context
+            pred_request_id, wave_outputs, all_signals, context, tenant
         )
 
         total_ms = int((time.perf_counter() - started) * 1000)
@@ -276,7 +291,7 @@ class PersonaRunner:
         return {
             "pred_request_id": pred_request_id,
             "bundle_id": str(bundle_id),
-            "tenant_id": self.tenant_id,
+            "tenant_id": tenant,
             "total_signals": len(all_signals),
             "decisions_run": len(wave_outputs),
             "wave_outputs": wave_outputs,
@@ -323,21 +338,26 @@ class PersonaRunner:
             for s in pre_d.get("signals", [])
         )
 
-    async def _load_portfolio_stats(self) -> dict:
-        """vw_portfolio_context, once per runner.
+    async def _load_portfolio_stats(self, tenant: str) -> dict:
+        """vw_portfolio_context for ONE tenant, cached per tenant.
 
-        dso_portfolio_manager is the only consumer and it reads the
-        aggregate across all pre-Ds, which does not change between the
-        rows of one batch.
+        dso_portfolio_manager is the only consumer. The view aggregates
+        across a practice's own pre-Ds, which does not change between
+        the rows of one batch — but it is emphatically NOT the same
+        across practices, hence the per-tenant key.
+
+        This is the single-practice view. The DSO-wide roll-up across
+        every practice is a different question with a different answer,
+        and it lives in DSOPortfolioManager.aggregate_all_tenants.
         """
-        if self._portfolio_stats is None:
+        if tenant not in self._portfolio_stats:
             rows = await fetch_with_tenant(
                 self.simulator_pool,
-                self.tenant_id,
+                tenant,
                 "SELECT * FROM vw_portfolio_context",
             )
-            self._portfolio_stats = dict(rows[0]) if rows else {}
-        return self._portfolio_stats
+            self._portfolio_stats[tenant] = dict(rows[0]) if rows else {}
+        return self._portfolio_stats[tenant]
 
     # ── Persistence ──────────────────────────────────────────────────
 
@@ -347,6 +367,7 @@ class PersonaRunner:
         wave_outputs: dict,
         all_signals: list,
         context: PredContext,
+        tenant: str,
     ) -> uuid.UUID:
         """Write to the dental-os database — never dental-simulator.
 
@@ -365,7 +386,7 @@ class PersonaRunner:
                 # silently dropped. is_local=true dies with the txn.
                 await conn.execute(
                     "SELECT set_config('app.tenant_id', $1, true)",
-                    self.tenant_id,
+                    tenant,
                 )
 
                 # ── decision_outputs — one row per decision ──────────
@@ -381,7 +402,7 @@ class PersonaRunner:
                         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                         """,
                         pred_request_id,
-                        self.tenant_id,
+                        tenant,
                         decision_id,
                         output["wave"],
                         output["mode"],
@@ -408,7 +429,7 @@ class PersonaRunner:
                     SELECT COALESCE(MAX(version), 0) FROM persona_bundles
                     WHERE pred_request_id = $1 AND tenant_id = $2
                     """,
-                    pred_request_id, self.tenant_id,
+                    pred_request_id, tenant,
                 )
                 await conn.execute(
                     """
@@ -416,7 +437,7 @@ class PersonaRunner:
                     WHERE pred_request_id = $1 AND tenant_id = $2
                       AND is_current
                     """,
-                    pred_request_id, self.tenant_id,
+                    pred_request_id, tenant,
                 )
                 await conn.execute(
                     """
@@ -429,7 +450,7 @@ class PersonaRunner:
                     """,
                     bundle_id,
                     pred_request_id,
-                    self.tenant_id,
+                    tenant,
                     _jsonb(self._snapshot(context)),
                     # Without this a replay re-resolves against today's
                     # catalogue and can reach a different answer than

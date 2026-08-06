@@ -254,8 +254,15 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+    # Sprint 2 — the multi-tenant shape of the deployment. Every count
+    # is Optional and defaults to None rather than 0: an unreadable
+    # count is not the same answer as an empty table, and conflating
+    # them is the RLS trap in miniature.
+    tenants: Optional[int] = None
     simulator_scenarios: Optional[int] = None
     decision_outputs: Optional[int] = None
     persona_bundles: Optional[int] = None
+    payers_supported: Optional[int] = None
+    states_supported: Optional[int] = None
     simulator_db: str
     os_db: str
