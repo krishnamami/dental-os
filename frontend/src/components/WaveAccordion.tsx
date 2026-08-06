@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Link } from "react-router-dom";
+import { ArrowRight, ChevronDown } from "lucide-react";
+
+import { useDemoLink } from "../hooks/useDemo";
 
 import type { Decision, Signal } from "../types/dental";
 import FeedbackBar from "./FeedbackBar";
@@ -23,6 +26,17 @@ const WAVE_TITLES: Record<string, string> = {
 
 const DEFAULT_OPEN = new Set(["3", "4"]);
 
+/** Signals whose reasoning the evidence chain explains. Only these get
+ *  a "view evidence chain" link — offering it on, say, a portfolio
+ *  signal would lead to a page with nothing to say about it. */
+const HAS_EVIDENCE_CHAIN = new Set([
+  "CLINICAL_CRITERIA_MET",
+  "CLINICAL_CRITERIA_NOT_MET",
+  "CLINICAL_NARRATIVE_MISSING",
+  "COVERAGE_BUNDLING_CONFLICT",
+  "DOC_NARRATIVE_MISSING",
+]);
+
 export default function WaveAccordion({
   waves,
   predRequestId,
@@ -31,6 +45,7 @@ export default function WaveAccordion({
   predRequestId: string;
 }) {
   const [open, setOpen] = useState<Set<string>>(new Set(DEFAULT_OPEN));
+  const demoLink = useDemoLink();
 
   function toggle(key: string) {
     setOpen((prev) => {
@@ -97,9 +112,23 @@ export default function WaveAccordion({
                 ) : (
                   signals.map((s) => (
                     <SignalCard key={`${s.decision_id}-${s.signal_code}`} signal={s}>
-                      {toneFor(s) !== "green" && (
-                        <FeedbackBar predRequestId={predRequestId} signal={s} />
-                      )}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        {toneFor(s) !== "green" && (
+                          <FeedbackBar
+                            predRequestId={predRequestId}
+                            signal={s}
+                          />
+                        )}
+                        {HAS_EVIDENCE_CHAIN.has(s.signal_code) && (
+                          <Link
+                            to={demoLink(`/evidence/${predRequestId}`)}
+                            className="inline-flex items-center gap-1 text-[12px] font-medium text-accord-green-900 hover:text-accord-green-700"
+                          >
+                            View evidence chain
+                            <ArrowRight size={12} />
+                          </Link>
+                        )}
+                      </div>
                     </SignalCard>
                   ))
                 )}
