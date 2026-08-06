@@ -1,21 +1,28 @@
 /**
- * Role + practice selection.
+ * C-01 — sign in.
  *
- * ⚠ NOT AUTHENTICATION. There is no password, no token and no server
- * check — picking a role here writes it to localStorage and the app
- * believes it. That is deliberate for a scaffold: the product pages
- * need a role to render against before an identity provider exists.
+ * ⚠ THIS IS NOT AUTHENTICATION. Any email and any non-empty password
+ * signs you in as a dentist. There is no identity provider, no token,
+ * and no server-side check — the role goes into localStorage and the
+ * app believes it.
  *
- * Replacing this with real auth is a prerequisite for serving any
- * patient data, and the change is not only here — the API has to
- * enforce role and tenant on every request too.
+ * Deliberate for a scaffold, and a hard blocker before real patient
+ * data is served. When that changes it is not only this screen: the API
+ * has to enforce role AND tenant on every request, and AuthContext
+ * becomes a cache of what the server already decided rather than the
+ * decision itself.
+ *
+ * The role selector below is a development affordance, not a product
+ * feature — it exists so the five role-specific shells can be built and
+ * reviewed before there is anything to authenticate against.
  */
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ROLES, ROLE_LABELS, useAuth } from "../context/AuthContext";
-import { useDemoLink } from "../hooks/useDemo";
+import { HOME_FOR_ROLE } from "../routes";
 import type { Role } from "../types/dental";
+import { Logo } from "../components/lp/primitives";
 
 const TENANTS = [
   { id: "suwanee_smiles", label: "Suwanee Smiles Dental — GA" },
@@ -23,110 +30,152 @@ const TENANTS = [
   { id: "dallas_dental", label: "Dallas Family Dental — TX" },
 ];
 
-const LANDING_BY_ROLE: Record<Role, string> = {
-  front_desk: "/workbench",
-  revenue_ops: "/revenue-ops",
-  dentist: "/workbench",
-  dso_owner: "/dso",
-  accord_admin: "/admin",
-};
-
 export default function Login() {
   const { signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const demoLink = useDemoLink();
 
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>("dentist");
   const [tenantId, setTenantId] = useState(TENANTS[0].id);
+  const [error, setError] = useState("");
 
   const from = (location.state as { from?: string } | null)?.from;
 
-  function submit(event: React.FormEvent) {
-    event.preventDefault();
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    // The only failure this can produce is an empty field. There is
+    // nothing to authenticate against yet.
+    if (!email.trim() || !password.trim()) {
+      setError("Invalid email or password");
+      return;
+    }
+    setError("");
     signIn(role, tenantId);
-    navigate(from ?? LANDING_BY_ROLE[role], { replace: true });
+    navigate(from ?? HOME_FOR_ROLE[role], { replace: true });
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
-      <div className="w-full max-w-md">
-        <Link
-          to={demoLink("/")}
-          className="text-sm font-semibold text-accord-green-700"
-        >
-          Accord Dental
-        </Link>
-        <h1 className="mt-4 text-2xl font-semibold text-slate-900">Sign in</h1>
+  const field =
+    "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500";
+  const label = "mb-1 block text-[12.5px] font-medium text-gray-700";
 
-        <div className="mt-4 rounded-md border border-accord-amber-50 bg-accord-amber-50/60 p-3 text-xs text-accord-amber-900">
-          <strong>Scaffold only.</strong> No password, no identity provider,
-          no server-side check. Choosing a role here does not protect
-          anything — it selects what the UI renders.
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-5 py-10">
+      <div className="w-full max-w-sm">
+        <div className="text-center">
+          <Link to="/" className="inline-block">
+            <Logo className="text-[19px]" />
+          </Link>
+          <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.01em] text-gray-900">
+            Sign in to Accord Dental
+          </h1>
+          <p className="mt-1.5 text-[13.5px] text-gray-500">
+            The Dental Decision Intelligence Platform
+          </p>
         </div>
 
         <form
           onSubmit={submit}
-          className="mt-6 space-y-5 rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+          className="mt-7 space-y-3.5 rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
         >
           <div>
-            <label
-              htmlFor="role"
-              className="block text-sm font-medium text-slate-700"
-            >
-              Role
+            <label className={label} htmlFor="email">
+              Email
             </label>
-            <select
-              id="role"
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
-                </option>
-              ))}
-            </select>
+            <input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@practice.com"
+              className={field}
+            />
           </div>
 
           <div>
-            <label
-              htmlFor="tenant"
-              className="block text-sm font-medium text-slate-700"
-            >
-              Practice
+            <label className={label} htmlFor="password">
+              Password
             </label>
-            <select
-              id="tenant"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {TENANTS.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className={field}
+            />
           </div>
+
+          {/* Development affordance — see the header. */}
+          <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-3.5">
+            <div>
+              <label className={label} htmlFor="role">
+                Sign in as
+              </label>
+              <select
+                id="role"
+                value={role}
+                onChange={(e) => setRole(e.target.value as Role)}
+                className={field}
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABELS[r]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={label} htmlFor="tenant">
+                Practice
+              </label>
+              <select
+                id="tenant"
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                className={field}
+              >
+                {TENANTS.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label.split(" — ")[0]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {error && (
+            <p role="alert" className="text-[12.5px] text-red-600">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
-            className="w-full rounded-md bg-accord-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-accord-green-900"
+            className="w-full rounded-lg bg-accord-green-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accord-green-700"
           >
-            Continue
+            Sign in
           </button>
+
+          <p className="text-center text-[13px] text-gray-500">
+            <Link
+              to="/workbench?demo=true"
+              className="font-medium text-accord-green-900 hover:text-accord-green-700"
+            >
+              Try demo →
+            </Link>
+          </p>
         </form>
 
-        <p className="mt-6 text-center text-sm text-slate-500">
-          Just looking?{" "}
-          <Link
-            to="/?demo=true"
-            className="font-medium text-accord-green-700 hover:text-accord-green-900"
+        <p className="mt-6 text-center text-[12.5px] text-gray-500">
+          Request access →{" "}
+          <a
+            href="mailto:demo@accorddental.io"
+            className="font-medium text-accord-green-900 hover:text-accord-green-700"
           >
-            Open the demo
-          </Link>
+            demo@accorddental.io
+          </a>
         </p>
       </div>
     </div>

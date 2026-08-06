@@ -1,3 +1,4 @@
+import { useDemoModal } from "../../hooks/useDemoModal";
 import { Container } from "./primitives";
 
 const STATS = [
@@ -8,6 +9,7 @@ const STATS = [
 ];
 
 export default function MetricsBanner() {
+  const modal = useDemoModal();
   return (
     <section className="bg-accord-green-900 py-16 text-white sm:py-20">
       <Container>
@@ -37,12 +39,13 @@ export default function MetricsBanner() {
         </dl>
 
         <div className="mt-11 text-center">
-          <a
-            href="#demo-cta"
+          <button
+            type="button"
+            onClick={modal.open}
             className="inline-flex items-center justify-center rounded-lg bg-white px-6 py-3 text-sm font-semibold text-accord-green-900 transition hover:bg-accord-green-50"
           >
             Request a demo
-          </a>
+          </button>
         </div>
       </Container>
     </section>

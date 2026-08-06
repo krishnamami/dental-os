@@ -12,7 +12,9 @@
  * API is unreachable — a visitor never sees an error, and never sees a
  * number the product cannot reproduce.
  */
+import { DemoModalProvider, useDemoModal } from "../../hooks/useDemoModal";
 import CTASection from "../../components/lp/CTASection";
+import DemoModal from "../../components/lp/DemoModal";
 import DemoSection from "../../components/lp/DemoSection";
 import FAQ from "../../components/lp/FAQ";
 import Footer from "../../components/lp/Footer";
@@ -26,7 +28,10 @@ import Steps from "../../components/lp/Steps";
 import ValueProps from "../../components/lp/ValueProps";
 import WhatIf from "../../components/lp/WhatIf";
 
-export default function LandingPage() {
+/** Split out so it can call useDemoModal — the provider has to be an
+ *  ancestor, and a component cannot consume a context it renders. */
+function LandingPageInner() {
+  const modal = useDemoModal();
   return (
     <div className="min-h-screen scroll-smooth bg-white text-gray-900">
       <Nav />
@@ -44,6 +49,15 @@ export default function LandingPage() {
         <CTASection />
       </main>
       <Footer />
+      <DemoModal isOpen={modal.isOpen} onClose={modal.close} />
     </div>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <DemoModalProvider>
+      <LandingPageInner />
+    </DemoModalProvider>
   );
 }

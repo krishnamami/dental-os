@@ -1,5 +1,6 @@
 import { ArrowRight } from "lucide-react";
 
+import { useDemoModal } from "../../hooks/useDemoModal";
 import { Container, Eyebrow, GhostButton, PrimaryButton } from "./primitives";
 import WorkbenchCard from "./WorkbenchCard";
 
@@ -11,6 +12,7 @@ const STATS = [
 ];
 
 export default function Hero() {
+  const modal = useDemoModal();
   return (
     <section id="top" className="pb-14 pt-12 sm:pb-20 sm:pt-16">
       <Container>
@@ -30,7 +32,7 @@ export default function Hero() {
             </p>
 
             <div className="mt-7 flex flex-wrap gap-3">
-              <PrimaryButton href="#demo-cta">Request a demo</PrimaryButton>
+              <PrimaryButton onClick={modal.open}>Request a demo</PrimaryButton>
               <GhostButton href="#how-it-works">
                 See how it works
                 <ArrowRight size={15} />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 
+import { useDemoModal } from "../../hooks/useDemoModal";
 import { Container, Logo, PrimaryButton } from "./primitives";
 
 const LINKS = [
@@ -20,6 +21,7 @@ const LINKS = [
  */
 export default function Nav() {
   const [open, setOpen] = useState(false);
+  const modal = useDemoModal();
 
   // Escape closes, and body scroll is locked while the sheet is open so
   // the page behind does not slide under the user's thumb.
@@ -62,7 +64,10 @@ export default function Nav() {
             >
               Log in
             </Link>
-            <PrimaryButton href="#demo-cta" className="px-4 py-2 text-[13.5px]">
+            <PrimaryButton
+              onClick={modal.open}
+              className="px-4 py-2 text-[13.5px]"
+            >
               Request a demo
             </PrimaryButton>
           </div>
@@ -101,9 +106,11 @@ export default function Nav() {
                 Log in
               </Link>
               <PrimaryButton
-                href="#demo-cta"
                 className="mt-2 w-full"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  modal.open();
+                }}
               >
                 Request a demo
               </PrimaryButton>
