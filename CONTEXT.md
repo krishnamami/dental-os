@@ -28,25 +28,39 @@ loaded first** — this repo has no data of its own and never will.
 python scripts/test_connection.py
 ```
 
-Expected, verified against the live RDS on 2026-08-05:
+Expected, verified against the live RDS on 2026-08-06:
 
 ```
   pred_states          35      (approved=8, denied=7, pended=20)
   clinical_evidence   183      (108 with an s3_key + 75 structured payloads)
   procedure_lines      67
+  fee_schedules       588      28 codes x 3 payers x 7 states
+  coverage_rules      543      181 codes x 3 payers   (was 14)
   cdt_codes           181
   conditions_library   50
   frequency_limits     27
   bundling_rules       20
-  coverage_rules       14
   ada_guidelines       10
   downgrade_matrix      9
   providers             3
 ```
 
-> `scripts/test_connection.py` does not exist yet either. Writing it is the
-> first task of Phase 1 — it is the cheapest possible proof that the RLS
-> session variable, the credentials and the network path all work.
+## Catalogue versions
+
+`catalogue_versions` tracks 9 catalogues. Every decision stamps these into
+`persona_bundles`, so a replay can tell whether the rules moved underneath it.
+
+| catalogue | version | rows | states |
+|---|---|---|---|
+| `cdt_codes` | CDT-2026 | 181 | ALL |
+| `coverage_rules` | 1.1 | **543** | ALL |
+| `fee_schedules` | 2025-07-01 | **588** | GA FL TX NC SC TN AL |
+| `conditions_library` | 1.0 | 50 | ALL |
+| `frequency_limits` | 1.0 | 27 | ALL |
+| `bundling_rules` | 1.0 | 20 | ALL |
+| `ada_guidelines` | CDT-2026 | 10 | ALL |
+| `downgrade_matrix` | 1.0 | 9 | ALL |
+| `medical_history_flags` | 1.0 | 8 | ALL |
 
 ---
 
@@ -317,15 +331,16 @@ Reference case — **DA-M05**, "Low-Confidence Scanned Extraction":
 
 ## Known Gaps
 
-| # | Gap | Where it lives |
-|---|---|---|
-| 1 | Readiness flags not wired | dental-simulator |
-| 2 | Group U scenarios not built | dental-simulator |
-| 3 | Appeal generation — table exists, no logic | dental-simulator |
-| 4 | `coverage_rules` only 14 rows | dental-simulator |
-| 5 | `AI_FALLBACK_FLOOR` 0.6 vs `TRUST_FLOOR` 0.70 | dental-simulator |
-| 6 | DA-M05 described wrong in dental-simulator PRD §15 | dental-simulator |
-| 7 | `pred_requests.status` is a single value | dental-simulator |
+| # | Gap | Where it lives | Status |
+|---|---|---|---|
+| 1 | Readiness flags not wired | dental-simulator | open |
+| 2 | Group U scenarios not built | dental-simulator | open |
+| 3 | Appeal generation — table exists, no logic | dental-simulator | open |
+| 4 | `coverage_rules` breadth | dental-simulator | **CLOSED** |
+| 4a | Coverage *provenance* — 14 of 181 traced | dental-simulator | open |
+| 5 | `AI_FALLBACK_FLOOR` 0.6 vs `TRUST_FLOOR` 0.70 | dental-simulator | half-closed |
+| 6 | DA-M05 described wrong in dental-simulator PRD §15 | dental-simulator | open |
+| 7 | `pred_requests.status` is a single value | dental-simulator | open |
 
 **GAP #1 — Readiness flags not wired.**
 The 14 named checks in dental-simulator PRD §12 are specified but never rolled
@@ -346,11 +361,54 @@ columns and nothing populates them. `appeal_specialist` is fully specified in
 `decisions.yaml` with no generator behind it. Highest-value unbuilt thing in
 either repo — the PRD's "3–5 hours → <2 minutes" is unearned until it exists.
 
-**GAP #4 — `coverage_rules` is 14 rows.**
-Enough for 35 scenarios and enough to prove the hierarchy is not Delta-specific
-(DA-C06/C07 exercise the payer-override layer). Not enough to run a practice.
-Since every citation must trace to a catalogue row (RULE 13), coverage breadth
-is a hard ceiling on how many real cases the product can speak to.
+**GAP #4 — coverage_rules breadth. CLOSED.**
+**543 rows = 181 CDT codes × 3 payers** (Delta Dental PPO, Cigna DPPO,
+MetLife PDP). Every code resolves for every payer; `coverage_resolver` returns
+no SAFE_DEFAULT for any billed pair across the 35 scenarios.
+
+```
+  Tier 1  explicit payer rules      14 codes (Delta only)
+          bundling, frequency, downgrade, policy section, from the
+          published provider manual — seed_delta_dental_rules.sql
+  Tier 2  category defaults        163 Delta / 177 each Cigna + MetLife
+          (category, subcategory) -> benefit class
+  Tier 3  explicitly not covered      4 codes
+          D1310 D1330 counselling, D0470 casts, D9230 nitrous
+```
+
+`fee_schedules`: **588 rows across 7 states** — 28 codes × 3 payers × GA, FL,
+TX, NC, SC, TN, AL.
+
+`coverage_resolver` is what the breadth was for. Per code it answers what used
+to need a phone call to Delta:
+`UCR fee -> contracted rate -> in-network discount -> deductible -> plan pays
+-> patient owes`. Validated against dental-simulator's own `cost_estimates`,
+computed independently: **32 of 35 scenarios agree on the patient total**, and
+DA-A01 agrees line for line ($1,017.50 / $212.50 / $595.00, total $1,825.00).
+
+Seeded by `dental-simulator scripts/seed_coverage_rules_tier2_tier3.py`,
+idempotent, Tier 1 asserted unchanged.
+
+**GAP #4a — coverage PROVENANCE. Open, and the reason #4 is only half a win.**
+Breadth is not provenance. **Only 14 of the 181 codes trace to a published
+manual.** The other 167 carry standard commercial class defaults — preventive
+100%, basic 80%, major and implant 50% — which are right for a typical PPO and
+wrong for any plan that negotiated otherwise. RULE 13 is satisfied in form
+(every rule has a catalogue row) and not in substance (a Tier 2 row cites a
+convention, not a document). Owned by `refresh_payer_rules.py`.
+
+Two derived values ride on the same caveat:
+- `deductible_applies` is computed as `benefit_category != 'preventive'`.
+  There is no such column. That one derivation is why DA-C07 disagrees with
+  `cost_estimates` by $50.
+- DA-B05 and DA-D03 diverge deliberately: when the waiting period is not met
+  the resolver pays **$0**, because the plan genuinely pays nothing today,
+  while `cost_estimates` prices the case as though approved. For a
+  pre-treatment quote the resolver's answer is the honest one.
+
+And on fees: only Georgia's **66** SPA-adjusted rows trace to a government
+document. The other six states are GA amounts times a judgement multiplier —
+see `refresh_fee_schedules.py`.
 
 **GAP #5 — Two confidence floors.**
 See the section above. Half-closed: dental-os agrees with the assembler now;

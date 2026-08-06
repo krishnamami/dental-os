@@ -510,8 +510,17 @@ bone graft · 60% write-off rate (never appealed) · 65% overturn when documente
 
 ## 11. KNOWN GAPS
 
-Carried forward from `dental-simulator`, deliberately. These are the first real
-work items once Phase 0 closes.
+Carried forward from `dental-simulator`, deliberately.
+
+| # | Gap | Status |
+|---|---|---|
+| 1 | Readiness flags not wired | open |
+| 2 | Group U scenarios not built | open |
+| 3 | Appeal generation — table, no logic | open |
+| 4 | `coverage_rules` breadth | **CLOSED** — 543 rows |
+| 4a | Coverage *provenance* — 14 of 181 codes traced to a manual | open |
+| 5 | Two `CONFIDENCE_FLOOR` constants | half-closed |
+| 6 | `dental_scenarios.xlsx` churn | cosmetic |
 
 ### 1. Readiness flags not wired in `dental-simulator`
 
@@ -544,15 +553,59 @@ boundary and viability thresholds, but there is no generator behind it yet.
 This is the single highest-value unbuilt thing in either repo — §9.1 claims
 3–5 hours → <2 minutes and today that number is unearned.
 
-### 4. `coverage_rules` is only 14 rows
+### 4. ~~`coverage_rules` is only 14 rows~~ — **CLOSED**
 
-Enough to drive the 35 scenarios and prove the rule hierarchy is not
-Delta-specific (DA-C06/C07 exercise the payer-override layer). **Not** enough to
-run a real practice. The full Delta Dental PPO ruleset is on the order of
-hundreds of CDT-code rules with bundling, frequency, downgrade and
-tooth-eligibility logic per code. Every rule `dental-os` cites must trace to a
-catalogue row — `no_citation_without_source` is a hard rule — so coverage
-breadth is a hard ceiling on how many real cases the product can speak to.
+Breadth is closed. **543 rows = 181 CDT codes × 3 payers** (Delta Dental PPO,
+Cigna DPPO, MetLife PDP). Every CDT code resolves for every payer, and
+`coverage_resolver` returns no SAFE_DEFAULT for any billed pair across the 35
+scenarios.
+
+| Tier | Codes | What it is |
+|---|---|---|
+| **1** — explicit payer rules | **14** (Delta only) | Read from the published provider manual: bundling, frequency, downgrade and policy section per code. `seed_delta_dental_rules.sql` |
+| **2** — category defaults | **163** Delta, **177** each for Cigna/MetLife | `(category, subcategory)` → benefit class. Standard commercial structure, **not** read from each payer's manual |
+| **3** — explicitly not covered | **4** | `D1310` + `D1330` counselling, `D0470` diagnostic casts, `D9230` nitrous |
+
+**`fee_schedules`: 588 rows across 7 states** — 28 codes × 3 payers × 7 states
+(GA, FL, TX, NC, SC, TN, AL).
+
+`coverage_resolver` is what this breadth was for. It answers the question that
+used to require a phone call to Delta Dental, per code:
+
+```
+  provider UCR fee  →  contracted rate  →  in-network discount
+                    →  deductible  →  plan pays  →  patient owes
+```
+
+Validated against dental-simulator's own `cost_estimates`, which computes the
+same claim independently: **32 of 35 scenarios agree on the patient total**, and
+DA-A01 agrees line for line ($1,017.50 / $212.50 / $595.00, total $1,825.00).
+
+### 4a. What closing #4 did NOT close
+
+Breadth is not the same as provenance, and two things are worth stating plainly
+before anyone quotes these numbers to a patient or a payer.
+
+**Only 14 of the 181 codes trace to a published manual.** The other 167 carry
+standard commercial class defaults — preventive 100%, basic 80%, major and
+implant 50%. Those percentages are right for a typical PPO and wrong for any
+plan that negotiated something else. `no_citation_without_source` is satisfied
+in form (every rule has a catalogue row) and not in substance (a Tier 2 row
+cites a convention, not a document). Closing this is
+`refresh_payer_rules.py`'s job.
+
+**`deductible_applies` is derived, not catalogued.** There is no such column;
+`rule_loader` computes it as `benefit_category != 'preventive'`. That single
+derivation is why DA-C07 disagrees with `cost_estimates` by $50.
+
+Two other scenarios (DA-B05, DA-D03) also diverge, deliberately: when the
+waiting period is not met the resolver pays **$0**, because the plan genuinely
+pays nothing today, while `cost_estimates` prices the case as though approved.
+For a pre-treatment quote the resolver's answer is the honest one.
+
+And on the fee side — see the note under `refresh_fee_schedules.py` — **only
+Georgia's 66 SPA-adjusted rows trace to a government document.** The other six
+states are GA amounts times a judgement multiplier.
 
 ### 5. `dental-simulator` has TWO different `CONFIDENCE_FLOOR` constants
 

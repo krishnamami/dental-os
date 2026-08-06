@@ -52,7 +52,9 @@ TABLES = [
     ("frequency_limits", 27),
     ("downgrade_matrix", 9),
     ("conditions_library", 50),
-    ("coverage_rules", 14),
+    ("coverage_rules", 543),      # 181 codes x 3 payers (T-10g)
+    ("fee_schedules", 588),       # 28 codes x 3 payers x 7 states
+    ("catalogue_versions", 9),
 ]
 
 
