@@ -3,9 +3,7 @@ import { ArrowLeft } from "lucide-react";
 
 import ConditionsPanel from "../../../components/ConditionsPanel";
 import DecisionBadge from "../../../components/DecisionBadge";
-import ReadinessChecklist, {
-  readinessScore,
-} from "../../../components/ReadinessChecklist";
+import ReadinessChecklist from "../../../components/ReadinessChecklist";
 import ReadinessBadge from "../../../components/ReadinessBadge";
 import WaveAccordion from "../../../components/WaveAccordion";
 import { useDecision } from "../../../hooks/useApi";
@@ -85,7 +83,10 @@ export default function WorkbenchDetail() {
                     {data.patient_name}
                   </h2>
                   <DecisionBadge decision={data.decision} />
-                  <ReadinessBadge score={readinessScore(data)} />
+                  <ReadinessBadge
+                    score={data.readiness_met ?? 0}
+                    total={data.readiness_total ?? 14}
+                  />
                 </div>
                 <p className="mt-1 text-[13px] text-gray-500">
                   {data.plan_name} · {data.provider_name} · {data.state} ·{" "}
@@ -155,7 +156,7 @@ export default function WorkbenchDetail() {
             </div>
 
             <div className="lg:col-span-1">
-              <ReadinessChecklist decision={data} />
+              <ReadinessChecklist flags={data.readiness_flags} />
             </div>
           </div>
         </>

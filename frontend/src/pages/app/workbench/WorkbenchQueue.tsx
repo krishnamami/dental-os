@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 
 import DecisionBadge from "../../../components/DecisionBadge";
 import ReadinessBadge from "../../../components/ReadinessBadge";
-import { readinessScore } from "../../../components/ReadinessChecklist";
 import { toneFor } from "../../../components/SignalCard";
 import { useDecision } from "../../../hooks/useApi";
 import { useDemoLink } from "../../../hooks/useDemo";
@@ -124,7 +123,8 @@ export default function WorkbenchQueue() {
       payer: data?.plan_name ?? "Delta Dental PPO",
       decision: (data?.decision as Row["decision"]) ?? "pended",
       signals: data?.all_signals.length ?? 17,
-      readiness: data ? readinessScore(data) : 10,
+      // From the engine now, not counted off the signal list.
+      readiness: data?.readiness_met ?? 13,
       live: Boolean(data),
     }),
     [data],

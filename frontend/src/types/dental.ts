@@ -74,6 +74,21 @@ export interface Decision {
   processed_at?: string;
   /** True when this request ran the personas instead of reading rows. */
   computed?: boolean;
+
+  /**
+   * The engine's 14 readiness booleans, straight from
+   * pred_states.readiness_flags. Keys are dental-simulator's names —
+   * see READINESS_LABELS for the prose.
+   *
+   * null means the engine has not scored this pre-D. That is NOT the
+   * same as every flag failing, and the checklist renders it
+   * differently.
+   */
+  readiness_flags: Record<string, boolean> | null;
+  /** Counted from readiness_flags. There is no engine score column. */
+  readiness_met: number | null;
+  readiness_total: number | null;
+  readiness_score: number | null;
 }
 
 // ── Conditions queue ─────────────────────────────────────────────────
