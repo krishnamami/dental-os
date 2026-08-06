@@ -373,7 +373,7 @@ measurement against the threshold. The human makes the judgment.**
 | `fraud_integrity` | Surfaces the `cdt_codes_noted` mismatch — billed D2750, note says D2740 | **Billing manager decides if it is fraudulent** or a charting slip |
 | `coverage_analyst` | Surfaces "D7953 is bundled with D6010 under Delta policy D.7.4; separable with documentation" | Billing decides whether to unbundle with docs or accept the bundle |
 | `clinical_reviewer` | Surfaces `bone_loss_mm = 3.4` against the ≥3.0mm threshold, criteria_score 0.88 | **Dr. Chinta confirms clinical necessity.** The score is evidence, not a verdict |
-| `documentation_reviewer` | Surfaces which required documents are missing, stale, or extracted below 0.60 confidence | Front desk chases the missing X-ray |
+| `documentation_reviewer` | Surfaces which required documents are missing, stale, or extracted below 0.70 confidence | Front desk chases the missing X-ray |
 | `pre_d_assessment` | Assembles every upstream disposition into one readiness view with open conditions listed | **Billing coordinator signs off before anything is submitted** |
 | `appeal_specialist` | Estimates 65% appeal viability, maps the denial code to a known appeal path, drafts the packet | **Billing + Dr. Chinta decide whether to appeal** |
 | `dso_portfolio_manager` | Surfaces the denial pattern across locations and the revenue at risk | DSO manager decides where to retrain |
@@ -420,7 +420,7 @@ This is the step that pays for the product. **Day 0, not day 14.**
 ### Step 3 — Submission · all conditions resolved
 
 `documentation_reviewer` confirms every required document is present, current,
-and extracted above 0.60 confidence. `pre_d_assessment` synthesises all of
+and extracted above 0.70 confidence. `pre_d_assessment` synthesises all of
 Waves 1–3 into one readiness view. The billing coordinator reads the open
 conditions, sees none, and signs off. **A human signs. Always.**
 
@@ -554,12 +554,55 @@ tooth-eligibility logic per code. Every rule `dental-os` cites must trace to a
 catalogue row — `no_citation_without_source` is a hard rule — so coverage
 breadth is a hard ceiling on how many real cases the product can speak to.
 
-### 5. Two smaller ones worth carrying
+### 5. `dental-simulator` has TWO different `CONFIDENCE_FLOOR` constants
 
-- `pdf_adapter.py` uses `CONFIDENCE_FLOOR = 0.70`; the extractors use `0.6`.
-  `documentation_reviewer`'s boundary is written against **0.60**. Reconcile
-  before wiring, or the same document will be "low confidence" in one place and
-  fine in another.
+**Status: half-closed.** `dental-os` picked a side; `dental-simulator` still
+disagrees with itself.
+
+There is no single confidence floor in the simulator. There are two, and which
+one applies depends on which layer of the pipeline is asking:
+
+| Constant | Value | Files |
+|---|---|---|
+| **Extraction floor** — when to spend a Claude token | `0.6` | `core/documents/extractors/base.py:21`, imported by `xray_extractor.py`, `perio_extractor.py`, `clinical_note_extractor.py`, `pred_letter_extractor.py` |
+| **Ingestion floor** — when a value is trustworthy enough to use | `0.70` | `core/ingestion/adapters/pdf_adapter.py:9`, `domains/dental/assemblers/clinical_assembler.py:10`, `scripts/build_scenarios_xlsx.py:118` |
+
+> **If you opened `base.py` expecting `0.70` and found `0.6`, this is why.**
+> Neither value is a typo and neither is wrong on its own — they answer
+> different questions. `0.6` is "is this bad enough that Claude should look at
+> it?" `0.70` is "is this good enough to base a decision on?" The bug is that
+> nothing in either repo says so, so the two read as one constant that
+> disagrees with itself.
+
+**The consequence** is the band between them. A document scoring **0.65** is
+*fine* to the extractor — good enough that the Claude fallback never fires — and
+simultaneously *requires verification* to `pdf_adapter.py`, which stamps
+`requires_verification=True` and `extraction_method=ai_vision` on a value no AI
+ever touched. The same number, the same document, two verdicts.
+
+**What `dental-os` did about it:** `documentation_reviewer` is written against
+**0.70**, and `decisions.yaml` carries a comment block at that boundary naming
+both constants and both file sets. 0.70 is the right side to land on here
+because `clinical_assembler.py` is what gates evidence into `pred_states`, and
+`pred_states` is the only thing this decision reads. So `dental-os` no longer
+disagrees with the assembler.
+
+**What is still open:** the split itself, which lives entirely in
+`dental-simulator`. Fixing it is a small change and a naming decision, not a
+refactor:
+
+1. Rename to say what each one means — `AI_FALLBACK_FLOOR = 0.6` and
+   `TRUST_FLOOR = 0.70` — so the two can never again be read as one value.
+2. Or collapse to a single constant and accept the cost: raising the extraction
+   floor to 0.70 sends more documents to Claude (every 0.6–0.7 document now
+   costs a token); lowering the trust floor to 0.6 admits weaker extractions
+   into `pred_states` and moves `documentation_reviewer`'s boundary with it.
+
+Until one of those happens, **do not assume a `CONFIDENCE_FLOOR` you find in
+`dental-simulator` is the one this PRD means.** Check which file it came from.
+
+### 6. One smaller one worth carrying
+
 - `scripts/dental_scenarios.xlsx` churns on every rebuild (openpyxl writes zip
   timestamps), so it always shows as modified. Ignore it; don't chase it.
 
