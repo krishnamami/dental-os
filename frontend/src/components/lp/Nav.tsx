@@ -84,16 +84,19 @@ export default function Nav() {
         </div>
       </Container>
 
+      {/* Full-screen overlay rather than a dropdown: a sheet that only
+          covers the top third leaves the page scrolling behind it, which
+          reads as a stuck menu. inset-0 below the 52px bar. */}
       {open && (
-        <div className="border-t border-gray-200 bg-white md:hidden">
-          <Container className="py-3">
-            <nav className="flex flex-col">
+        <div className="fixed inset-x-0 bottom-0 top-[52px] z-40 overflow-y-auto bg-white md:hidden">
+          <Container className="py-4">
+            <nav className="flex flex-col gap-1">
               {LINKS.map((l) => (
                 <a
                   key={l.label}
                   href={l.href}
                   onClick={() => setOpen(false)}
-                  className="rounded-lg px-2 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="flex min-h-[48px] items-center rounded-lg px-3 text-[15px] font-medium text-gray-700 hover:bg-gray-50"
                 >
                   {l.label}
                 </a>
@@ -101,12 +104,12 @@ export default function Nav() {
               <Link
                 to="/login"
                 onClick={() => setOpen(false)}
-                className="rounded-lg px-2 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="flex min-h-[48px] items-center rounded-lg px-3 text-[15px] font-medium text-gray-700 hover:bg-gray-50"
               >
                 Log in
               </Link>
               <PrimaryButton
-                className="mt-2 w-full"
+                className="mt-3 min-h-[48px] w-full text-[15px]"
                 onClick={() => {
                   setOpen(false);
                   modal.open();

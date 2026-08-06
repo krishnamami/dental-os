@@ -42,19 +42,37 @@ export default function CostTable({
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+      {/* Columns drop as the viewport narrows rather than the table
+          scrolling sideways. A patient reading a cost estimate on a
+          phone needs "what do I owe", not a horizontal scrollbar over
+          seven columns of payer arithmetic. Description goes first
+          (it is the longest), then the intermediate figures; CDT and
+          patient-pays survive to 375px. The full breakdown is always
+          one rotation or one desktop away, and the printed sheet
+          carries it regardless. */}
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left text-[12.5px]">
+        <table className="w-full text-left text-[12.5px]">
           <thead className="border-b border-gray-200 bg-gray-50">
             <tr className="text-[10.5px] uppercase tracking-wide text-gray-500">
               <th className="px-3 py-2.5 font-medium">CDT</th>
-              <th className="px-3 py-2.5 font-medium">Description</th>
-              <th className="px-3 py-2.5 font-medium">Tooth</th>
-              <th className="px-3 py-2.5 text-right font-medium">Dr. charges</th>
-              <th className="px-3 py-2.5 text-right font-medium">
+              <th className="hidden px-3 py-2.5 font-medium lg:table-cell">
+                Description
+              </th>
+              <th className="hidden px-3 py-2.5 font-medium sm:table-cell">
+                Tooth
+              </th>
+              <th className="hidden px-3 py-2.5 text-right font-medium md:table-cell">
+                Dr. charges
+              </th>
+              <th className="hidden px-3 py-2.5 text-right font-medium md:table-cell">
                 In-network discount
               </th>
-              <th className="px-3 py-2.5 text-right font-medium">Contracted</th>
-              <th className="px-3 py-2.5 text-right font-medium">Plan pays</th>
+              <th className="hidden px-3 py-2.5 text-right font-medium md:table-cell">
+                Contracted
+              </th>
+              <th className="hidden px-3 py-2.5 text-right font-medium sm:table-cell">
+                Plan pays
+              </th>
               <th className="px-3 py-2.5 text-right font-medium">
                 Patient pays
               </th>
@@ -103,7 +121,7 @@ export default function CostTable({
                     )}
                   </td>
 
-                  <td className="max-w-[240px] px-3 py-3 align-top text-gray-700">
+                  <td className="hidden max-w-[240px] px-3 py-3 align-top text-gray-700 lg:table-cell">
                     {p.description ?? "—"}
                     {!p.covered && p.not_covered_reason && (
                       <span className="mt-0.5 block text-[11px] text-red-600">
@@ -112,19 +130,19 @@ export default function CostTable({
                     )}
                   </td>
 
-                  <td className="px-3 py-3 align-top text-gray-600">
+                  <td className="hidden px-3 py-3 align-top text-gray-600 sm:table-cell">
                     {p.tooth_number ?? "—"}
                   </td>
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-gray-700">
+                  <td className="hidden px-3 py-3 text-right align-top tabular-nums text-gray-700 md:table-cell">
                     {formatCurrency(p.provider_ucr_fee)}
                   </td>
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-accord-green-700">
+                  <td className="hidden px-3 py-3 text-right align-top tabular-nums text-accord-green-700 md:table-cell">
                     ({formatCurrency(p.in_network_discount)})
                   </td>
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-gray-700">
+                  <td className="hidden px-3 py-3 text-right align-top tabular-nums text-gray-700 md:table-cell">
                     {formatCurrency(p.contracted_rate)}
                   </td>
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-gray-700">
+                  <td className="hidden px-3 py-3 text-right align-top tabular-nums text-gray-700 sm:table-cell">
                     {formatCurrency(p.insurance_pays)}
                   </td>
                   <td className="px-3 py-3 text-right align-top font-semibold tabular-nums text-gray-900">
@@ -137,19 +155,19 @@ export default function CostTable({
 
           <tfoot className="border-t border-gray-200 bg-gray-50 font-semibold">
             <tr>
-              <td className="px-3 py-3 text-gray-900" colSpan={3}>
-                Total
-              </td>
-              <td className="px-3 py-3 text-right tabular-nums text-gray-900">
+              <td className="px-3 py-3 text-gray-900">Total</td>
+              <td className="hidden px-3 py-3 lg:table-cell" />
+              <td className="hidden px-3 py-3 sm:table-cell" />
+              <td className="hidden px-3 py-3 text-right tabular-nums text-gray-900 md:table-cell">
                 {formatCurrency(summary.total_provider_charges)}
               </td>
-              <td className="px-3 py-3 text-right tabular-nums text-accord-green-700">
+              <td className="hidden px-3 py-3 text-right tabular-nums text-accord-green-700 md:table-cell">
                 ({formatCurrency(summary.total_in_network_savings)})
               </td>
-              <td className="px-3 py-3 text-right tabular-nums text-gray-900">
+              <td className="hidden px-3 py-3 text-right tabular-nums text-gray-900 md:table-cell">
                 {formatCurrency(summary.total_contracted)}
               </td>
-              <td className="px-3 py-3 text-right tabular-nums text-gray-900">
+              <td className="hidden px-3 py-3 text-right tabular-nums text-gray-900 sm:table-cell">
                 {formatCurrency(summary.total_insurance_pays)}
               </td>
               <td className="px-3 py-3 text-right tabular-nums text-gray-900">

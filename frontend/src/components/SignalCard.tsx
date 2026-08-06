@@ -65,7 +65,7 @@ export default function SignalCard({
 
   return (
     <article
-      className={`border-l-4 bg-white px-4 py-3.5 ${BORDER[tone]} rounded-r-lg border-y border-r border-gray-200`}
+      className={`min-h-[44px] border-l-4 bg-white px-4 py-3.5 ${BORDER[tone]} rounded-r-lg border-y border-r border-gray-200`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">

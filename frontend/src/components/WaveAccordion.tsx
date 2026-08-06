@@ -78,7 +78,7 @@ export default function WaveAccordion({
               type="button"
               onClick={() => toggle(key)}
               aria-expanded={expanded}
-              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-gray-50"
+              className="flex min-h-[44px] w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-gray-50"
             >
               <span className="min-w-0">
                 <span className="block truncate text-[13.5px] font-semibold text-gray-900">

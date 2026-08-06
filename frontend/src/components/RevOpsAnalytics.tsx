@@ -102,7 +102,7 @@ export default function RevOpsAnalytics() {
           {DENIAL_REASONS.map((d) => (
             <li key={d.code} className="flex items-center gap-3">
               <span
-                className="w-[150px] flex-shrink-0 truncate text-[12px] text-gray-600"
+                className="w-[104px] flex-shrink-0 truncate text-[12px] text-gray-600 sm:w-[150px]"
                 title={d.code}
               >
                 {d.label}

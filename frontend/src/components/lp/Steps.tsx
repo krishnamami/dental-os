@@ -40,7 +40,7 @@ export default function Steps() {
           </Sub>
         </div>
 
-        <ol className="mt-11 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <ol className="mt-11 grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-4">
           {STEPS.map((s, i) => (
             <li
               key={s.title}

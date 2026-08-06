@@ -20,7 +20,7 @@ export default function DemoSection() {
           </Sub>
         </div>
 
-        <div className="mx-auto mt-10 flex h-[380px] max-w-4xl items-center justify-center rounded-xl border border-gray-200 bg-gray-100">
+        <div className="mx-auto mt-10 flex aspect-video max-h-[380px] w-full max-w-4xl items-center justify-center rounded-xl border border-gray-200 bg-gray-100">
           <div className="text-center">
             <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-gray-400 shadow-sm">
               <Play size={22} fill="currentColor" />
@@ -29,7 +29,7 @@ export default function DemoSection() {
           </div>
         </div>
 
-        <div className="mt-7 flex flex-wrap justify-center gap-x-7 gap-y-2.5">
+        <div className="mt-7 flex flex-col items-center gap-2.5 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-x-7">
           {LINKS.map((l) => (
             <a
               key={l.label}

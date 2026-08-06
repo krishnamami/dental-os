@@ -76,7 +76,7 @@ export default function FeedbackBar({
             type="button"
             disabled={mutation.isPending}
             onClick={() => submit(o.type)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-2.5 py-1 text-[12px] font-medium text-gray-600 transition hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-[12px] font-medium text-gray-600 transition hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50"
           >
             <Icon size={12} />
             {o.label}

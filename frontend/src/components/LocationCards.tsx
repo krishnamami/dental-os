@@ -64,7 +64,7 @@ export default function LocationCards({
                 </span>
               </header>
 
-              <dl className="mt-3.5 grid grid-cols-3 gap-y-3">
+              <dl className="mt-3.5 grid grid-cols-2 gap-y-3 sm:grid-cols-3">
                 {[
                   { k: "Pre-Ds", v: String(p.total_pre_ds) },
                   {
@@ -72,15 +72,15 @@ export default function LocationCards({
                     v: formatPercent(p.approval_rate),
                     tone: rateTone(p.approval_rate),
                   },
-                  { k: "Approved", v: String(p.approved) },
-                  { k: "Denied", v: String(p.denied) },
-                  { k: "Pended", v: String(p.pended) },
+                  { k: "Approved", v: String(p.approved), dense: true },
+                  { k: "Denied", v: String(p.denied), dense: true },
+                  { k: "Pended", v: String(p.pended), dense: true },
                   {
                     k: "Patient rev.",
                     v: formatCurrency(p.total_patient_pays),
                   },
                 ].map((s) => (
-                  <div key={s.k}>
+                  <div key={s.k} className={s.dense ? "hidden sm:block" : ""}>
                     <dt className="text-[10.5px] uppercase tracking-wide text-gray-500">
                       {s.k}
                     </dt>
@@ -120,7 +120,7 @@ export default function LocationCards({
         <ul className="mt-3 space-y-2.5">
           {ordered.map((p) => (
             <li key={p.tenant_id} className="flex items-center gap-3">
-              <span className="w-[120px] flex-shrink-0 truncate text-[12px] text-gray-600">
+              <span className="w-[84px] flex-shrink-0 truncate text-[12px] text-gray-600 sm:w-[120px]">
                 {p.practice_name}
               </span>
               <span className="h-4 flex-1 overflow-hidden rounded bg-gray-100">

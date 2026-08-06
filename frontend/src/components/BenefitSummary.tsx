@@ -88,15 +88,15 @@ export default function BenefitSummary({
         <button
           type="button"
           onClick={() => window.print()}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accord-green-900 px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-accord-green-700"
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-accord-green-900 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-accord-green-700"
         >
           <Printer size={14} />
-          Print summary
+          Print for patient
         </button>
         <button
           type="button"
           onClick={copy}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3.5 py-2 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50"
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2.5 text-[13px] font-medium text-gray-700 transition hover:bg-gray-50"
         >
           <Copy size={14} />
           Email to patient

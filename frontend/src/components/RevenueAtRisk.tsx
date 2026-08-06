@@ -74,7 +74,7 @@ export default function RevenueAtRisk({
         <ul className="mt-3 space-y-2.5">
           {ordered.map((p) => (
             <li key={p.tenant_id} className="flex items-center gap-3">
-              <span className="w-[120px] flex-shrink-0 truncate text-[12px] text-gray-600">
+              <span className="w-[84px] flex-shrink-0 truncate text-[12px] text-gray-600 sm:w-[120px]">
                 {p.practice_name}
               </span>
               <span className="h-4 flex-1 overflow-hidden rounded bg-gray-100">

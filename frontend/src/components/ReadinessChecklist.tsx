@@ -143,7 +143,9 @@ export default function ReadinessChecklist({
         <ReadinessBadge score={met} total={keys.length} />
       </header>
 
-      <ul className="divide-y divide-gray-50">
+      {/* Two columns from sm up: 14 single-file rows push the submit
+          button off an iPad screen. */}
+      <ul className="sm:grid sm:grid-cols-2 sm:gap-x-4 sm:divide-y-0 sm:px-2 sm:py-1 divide-y divide-gray-50 lg:block lg:divide-y lg:px-0 lg:py-0">
         {keys.map((key) => {
           const ok = flags[key];
           return (

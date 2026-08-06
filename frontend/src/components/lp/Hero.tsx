@@ -31,9 +31,14 @@ export default function Hero() {
               revenue operations, appeals, and DSO performance.
             </p>
 
-            <div className="mt-7 flex flex-wrap gap-3">
-              <PrimaryButton onClick={modal.open}>Request a demo</PrimaryButton>
-              <GhostButton href="#how-it-works">
+            <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <PrimaryButton
+                onClick={modal.open}
+                className="min-h-[44px] w-full sm:w-auto"
+              >
+                Request a demo
+              </PrimaryButton>
+              <GhostButton href="#how-it-works" className="min-h-[44px] w-full sm:w-auto">
                 See how it works
                 <ArrowRight size={15} />
               </GhostButton>

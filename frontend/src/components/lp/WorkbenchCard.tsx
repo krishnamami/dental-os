@@ -205,11 +205,11 @@ export default function WorkbenchCard() {
           },
           { label: "Patient pays", value: 1825, tone: "text-gray-900" },
         ].map((c) => (
-          <div key={c.label} className="px-4 py-3">
-            <p className="text-[10.5px] uppercase tracking-wide text-gray-500">
+          <div key={c.label} className="px-2.5 py-3 sm:px-4">
+            <p className="text-[9.5px] uppercase leading-tight tracking-wide text-gray-500 sm:text-[10.5px]">
               {c.label}
             </p>
-            <p className={`mt-0.5 text-[15px] font-semibold ${c.tone}`}>
+            <p className={`mt-0.5 text-[13px] font-semibold sm:text-[15px] ${c.tone}`}>
               {formatCurrencyShort(c.value)}
             </p>
           </div>

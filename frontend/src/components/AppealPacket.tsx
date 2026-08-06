@@ -104,7 +104,7 @@ export default function AppealPacket({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 sm:items-center sm:p-4"
       onClick={onClose}
       role="presentation"
     >
@@ -113,15 +113,15 @@ export default function AppealPacket({
         aria-modal="true"
         aria-labelledby="packet-title"
         onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl sm:my-0"
+        className="relative min-h-full w-full max-w-2xl bg-white p-5 shadow-xl sm:my-0 sm:min-h-0 sm:rounded-2xl sm:p-6"
       >
         <button
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="absolute right-4 top-4 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 print:hidden"
+          className="absolute right-3 top-3 rounded-lg p-2.5 text-gray-500 hover:bg-gray-100 print:hidden"
         >
-          <X size={18} />
+          <X size={20} />
         </button>
 
         <div className="print-only-packet">

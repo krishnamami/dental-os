@@ -142,7 +142,7 @@ export default function DemoModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:items-center"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 sm:items-center sm:p-4"
       onClick={onClose}
       role="presentation"
     >
@@ -153,7 +153,7 @@ export default function DemoModal({
         // Stops a click inside the card from reaching the overlay
         // handler and closing the modal mid-typing.
         onClick={(e) => e.stopPropagation()}
-        className="relative my-8 w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl sm:my-0 sm:p-8"
+        className="relative min-h-full w-full max-w-lg bg-white p-5 shadow-xl sm:my-0 sm:min-h-0 sm:rounded-2xl sm:p-8"
       >
         <button
           type="button"
@@ -187,7 +187,7 @@ export default function DemoModal({
             </p>
 
             <form onSubmit={onSubmit} className="mt-5 space-y-3.5">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className={label} htmlFor="dm-first">
                     First name *
@@ -288,7 +288,7 @@ export default function DemoModal({
               <button
                 type="submit"
                 disabled={status === "sending"}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accord-green-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accord-green-700 disabled:opacity-60"
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg bg-accord-green-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-accord-green-700 disabled:opacity-60"
               >
                 {status === "sending"
                   ? "Sending…"

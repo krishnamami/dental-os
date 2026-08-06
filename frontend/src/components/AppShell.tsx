@@ -45,7 +45,7 @@ export default function AppShell() {
     <div className="min-h-screen bg-gray-50">
       <div className="flex">
         {/* ── Sidebar (desktop) ───────────────────────────────── */}
-        <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white md:flex">
+        <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white lg:flex">
           <div className="flex h-[52px] items-center border-b border-gray-200 px-4">
             <Link to={demoLink("/")}>
               <Logo />
@@ -101,10 +101,10 @@ export default function AppShell() {
         </aside>
 
         {/* ── Content ─────────────────────────────────────────── */}
-        <div className="min-w-0 flex-1 md:ml-[200px]">
+        <div className="min-w-0 flex-1 lg:ml-[200px]">
           <DemoBanner />
 
-          <header className="sticky top-0 z-30 flex h-[48px] items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 sm:px-6">
+          <header className="sticky top-0 z-30 flex min-h-[48px] items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-2 sm:px-6">
             <h1 className="truncate text-[14px] font-semibold text-gray-900">
               {title}
             </h1>
@@ -121,16 +121,19 @@ export default function AppShell() {
             </div>
           </header>
 
-          {/* pb-20 clears the mobile tab bar so the last row of any
-              table is not sitting underneath it. */}
-          <main className="pb-20 md:pb-0">
+          {/* Clears the 60px tab bar plus the iOS home indicator, so
+              the last row of a table is never under the user's thumb. */}
+          <main className="pb-[calc(60px+env(safe-area-inset-bottom))] lg:pb-0">
             <Outlet />
           </main>
         </div>
       </div>
 
       {/* ── Bottom tabs (mobile) ──────────────────────────────── */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white md:hidden">
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
+      >
         <div className="flex">
           {items.slice(0, 5).map((item) => {
             const active = isActive(item, pathname);
@@ -139,12 +142,14 @@ export default function AppShell() {
               <NavLink
                 key={item.label}
                 to={demoLink(item.to)}
-                className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] ${
+                // 60px tall: Apple's 44px minimum plus the label. A tab
+                // a thumb misses is worse than no tab.
+                className={`flex h-[60px] flex-1 flex-col items-center justify-center gap-1 text-[9px] ${
                   active ? "text-accord-green-900" : "text-gray-500"
                 }`}
               >
-                <Icon size={18} />
-                <span className="max-w-full truncate px-1 leading-tight">
+                <Icon size={20} />
+                <span className="max-w-full truncate px-0.5 leading-tight">
                   {item.label.split(" ")[0]}
                 </span>
               </NavLink>
