@@ -1,0 +1,995 @@
+{
+  "domain": "dental",
+  "version": "1.0.0",
+  "description": "Controlled vocabulary, business definitions, and ontology for the 9 dental pre-determination decisions defined in decisions.yaml. Every entity below is owned by dental-simulator and READ-ONLY to dental-os.",
+
+  "_verified": {
+    "against": "dental-postgres.c2feioes4hil.us-east-1.rds.amazonaws.com/dental",
+    "date": "2026-08-05",
+    "method": "information_schema.columns + SELECT count(*) per table, with app.tenant_id = 'suwanee_smiles'",
+    "note": "Every property name, type and row count in this file was read from the live RDS, not transcribed from a PRD. Where a PRD and this file disagree, this file was checked more recently."
+  },
+
+  "ownership": {
+    "_description": "dental-os is the explanation layer. dental-simulator is the system of record. This boundary is enforced, not conventional.",
+    "source_repo": "dental-simulator",
+    "dental_os_reads": true,
+    "dental_os_writes": false,
+    "rationale": "dental-simulator assembled pred_states from the payer rules and the ADA criteria. dental-os reads that state and explains it. A write from dental-os into a simulator table would make the decision unreproducible from the simulator alone, which is the one property the whole two-repo split exists to preserve.",
+    "dental_os_own_tables": [
+      "decision_outputs",
+      "persona_bundles",
+      "provider_feedback",
+      "appeal_packets"
+    ],
+    "dental_os_own_tables_note": "Created by dental-os migrations (migrations/002_dental_os_tables.sql). These are the ONLY tables dental-os writes to. See system_object_types below."
+  },
+
+  "vocabulary": {
+    "criteria_score": {
+      "canonical": "criteria_score",
+      "synonyms": ["clinical_score", "ada_criteria_score", "documentation_score"],
+      "definition": "Weighted score (0-1) of how completely the clinical evidence satisfies the ADA criteria checklist for a procedure. 0.85+ sufficient, 0.70-0.84 pend, 0.30-0.69 review, below 0.30 insufficient. Evidence of documentation quality — NOT a diagnosis.",
+      "data_type": "float",
+      "range": [0.0, 1.0],
+      "owner_team": "dentist"
+    },
+    "bone_loss_mm": {
+      "canonical": "bone_loss_mm",
+      "synonyms": ["radiographic_bone_loss", "crestal_bone_loss", "bone_loss"],
+      "definition": "Vertical bone loss in millimetres measured at the site from a periapical radiograph. The ≥3.0mm threshold is what supports D7953 and D6010.",
+      "data_type": "float",
+      "owner_team": "dentist"
+    },
+    "pocket_depth_max": {
+      "canonical": "pocket_depth_max",
+      "synonyms": ["max_pocket_depth", "deepest_pocket", "probing_depth_max"],
+      "definition": "Deepest periodontal probing depth in millimetres from the perio chart. D4260 osseous surgery requires ≥5mm in 6+ sites.",
+      "data_type": "float",
+      "owner_team": "dentist"
+    },
+    "sites_gte_5mm": {
+      "canonical": "sites_gte_5mm",
+      "synonyms": ["sites_over_5mm", "deep_pocket_sites", "surgical_sites"],
+      "definition": "Count of probing sites measuring 5mm or deeper. Paired with pocket_depth_max to establish periodontal surgical necessity.",
+      "data_type": "integer",
+      "owner_team": "dentist"
+    },
+    "cdt_code": {
+      "canonical": "cdt_code",
+      "synonyms": ["procedure_code", "dental_code", "ada_code", "d_code"],
+      "definition": "ADA Current Dental Terminology procedure code (D-prefixed). The primary key on coverage_rules is payer_id + cdt_code — the same code can carry different rules per payer.",
+      "data_type": "string",
+      "owner_team": "billing"
+    },
+    "tooth_number": {
+      "canonical": "tooth_number",
+      "synonyms": ["tooth", "tooth_no", "universal_tooth_number"],
+      "definition": "Universal numbering 1-32. NOT FDI and NOT Palmer notation. Tooth #19 is the lower-left first molar and is the reference-scenario site.",
+      "data_type": "integer",
+      "range": [1, 32],
+      "owner_team": "dentist"
+    },
+    "tooth_surface": {
+      "canonical": "tooth_surface",
+      "synonyms": ["surface", "surfaces", "restored_surfaces"],
+      "definition": "Tooth surface(s) treated, as a combination of M/D/O/B/L/F (e.g. MOD, DO). A billed surface that disagrees with the radiographic finding is a fraud_integrity surface_conflict signal.",
+      "data_type": "string",
+      "owner_team": "billing"
+    },
+    "annual_max_remaining": {
+      "canonical": "annual_max_remaining",
+      "synonyms": ["remaining_annual_maximum", "benefit_remaining", "annual_maximum_remaining"],
+      "definition": "Dollars left on the plan's annual maximum for the current benefit year. Note the column is annual_maximum_remaining on eligibility_profiles and annual_max_remaining on pred_states — same concept, two spellings.",
+      "data_type": "float",
+      "owner_team": "front_desk"
+    },
+    "waiting_period_met": {
+      "canonical": "waiting_period_met",
+      "synonyms": ["waiting_period_satisfied", "wait_met"],
+      "definition": "True when the plan's waiting period for this service category has elapsed since enrollment_start. Major services commonly carry 12 months; implants often longer.",
+      "data_type": "boolean",
+      "owner_team": "front_desk"
+    },
+    "implant_coverage": {
+      "canonical": "implant_coverage",
+      "synonyms": ["implant_covered", "implants_covered", "implant_benefit"],
+      "definition": "True when the plan covers implant services at all. When false, every D6-prefixed code is a hard block and the denial is NOT appealable — it is a plan exclusion, not a determination.",
+      "data_type": "boolean",
+      "owner_team": "front_desk"
+    },
+    "missing_tooth_clause": {
+      "canonical": "missing_tooth_clause",
+      "synonyms": ["mtc", "missing_tooth_exclusion", "pre_existing_missing_tooth"],
+      "definition": "Plan provision excluding replacement of a tooth that was already missing before enrollment. Present on the plan is not the same as confirmed for this tooth — eligibility_profiles carries both missing_tooth_clause and missing_tooth_clause_confirmed.",
+      "data_type": "boolean",
+      "owner_team": "front_desk"
+    },
+    "has_bundling_conflict": {
+      "canonical": "has_bundling_conflict",
+      "synonyms": ["bundling_conflict", "not_separately_payable", "bundled"],
+      "definition": "True when two billed CDT codes cannot be paid separately on the same date. SOFT (separable with documentation, e.g. D7953 with D6010 under Delta D.7.4) escalates; HARD (e.g. D2950 with a crown under D.4.3) blocks.",
+      "data_type": "boolean",
+      "owner_team": "billing"
+    },
+    "downgrade": {
+      "canonical": "downgrade_to_cdt",
+      "synonyms": ["alternate_benefit", "downgrade_applied", "least_expensive_alternative"],
+      "definition": "The code the payer will actually reimburse instead of the one billed (D2740 all-ceramic → D2750 PFM). Not a denial — a lower payment the patient must be told about before treatment.",
+      "data_type": "string",
+      "owner_team": "billing"
+    },
+    "frequency_limit": {
+      "canonical": "frequency_limit",
+      "synonyms": ["frequency_limitation", "frequency_cap", "benefit_frequency"],
+      "definition": "How often a code is payable, scoped per_tooth | per_quadrant | per_arch | per_patient (e.g. crown 1 per 5 years per tooth). Detecting gaming against this limit is why fraud_integrity carries a 1825-day context window.",
+      "data_type": "object",
+      "owner_team": "billing"
+    },
+    "confidence_score": {
+      "canonical": "confidence_score",
+      "synonyms": ["extraction_confidence", "doc_confidence"],
+      "definition": "Confidence (0-1) that the fields extracted from a document reflect what the document says. TWO different floors apply to this one value — see confidence_floors below. dental-os gates on 0.70.",
+      "data_type": "float",
+      "range": [0.0, 1.0],
+      "owner_team": "front_desk"
+    },
+    "extraction_method": {
+      "canonical": "extraction_method",
+      "synonyms": ["extraction_source", "how_extracted"],
+      "definition": "How the fields on a piece of evidence were obtained. Enforced by a CHECK constraint. Lets a query distinguish a parsed value from an inferred one from a value we were simply handed.",
+      "data_type": "string",
+      "allowed_values": ["deterministic", "ai_vision", "caller_supplied", "none"],
+      "owner_team": "front_desk"
+    },
+    "oig_excluded": {
+      "canonical": "oig_excluded",
+      "synonyms": ["leie_hit", "excluded_provider", "sanctioned_provider"],
+      "definition": "True when the provider's NPI appears on the OIG List of Excluded Individuals/Entities. Absolute hard stop — no federal healthcare programme may pay this provider (42 CFR 1001.1901(b)).",
+      "data_type": "boolean",
+      "owner_team": "billing"
+    },
+    "nppes_verified": {
+      "canonical": "nppes_verified",
+      "synonyms": ["npi_verified", "npi_valid"],
+      "definition": "True when the NPI was confirmed against the NPPES registry. Dr. Chinta is 1134534266; the earlier 1467573653 is not a registered NPI and must never reappear.",
+      "data_type": "boolean",
+      "owner_team": "billing"
+    },
+    "network_status": {
+      "canonical": "network_status",
+      "synonyms": ["par_status", "in_network_status", "participation"],
+      "definition": "Whether the provider participates with this payer. Out-of-network escalates (higher cost-sharing, possible gap exception) but never blocks.",
+      "data_type": "string",
+      "allowed_values": ["in_network", "out_of_network"],
+      "owner_team": "billing"
+    },
+    "coordination_of_benefits": {
+      "canonical": "coordination_of_benefits",
+      "synonyms": ["cob", "dual_coverage", "secondary_insurance"],
+      "definition": "True when the patient carries a second plan. Primary is determined by the birthday rule; the primary EOB must be attached before the secondary claim goes out.",
+      "data_type": "boolean",
+      "owner_team": "front_desk"
+    },
+    "medical_necessity_met": {
+      "canonical": "medical_necessity_met",
+      "synonyms": ["necessity_established", "clinically_necessary"],
+      "definition": "True when the chart establishes that the procedure is clinically necessary. For D7953 specifically this must be established INDEPENDENT of the implant, which is what unbundles it.",
+      "data_type": "boolean",
+      "owner_team": "dentist"
+    },
+    "open_conditions": {
+      "canonical": "open_conditions",
+      "synonyms": ["outstanding_conditions", "conditions", "pend_checklist"],
+      "definition": "Condition codes from conditions_library that are unresolved on this pre-D. Each carries a template, a payer citation, an SLA and an assignee.",
+      "data_type": "list<string>",
+      "owner_team": "billing"
+    },
+    "decision": {
+      "canonical": "decision",
+      "synonyms": ["pred_decision", "payer_decision", "outcome"],
+      "definition": "The payer's determination on the pre-D. This is the POLICY ENGINE's output, already computed by dental-simulator — dental-os explains it and never recomputes it.",
+      "data_type": "string",
+      "allowed_values": ["approved", "denied", "pended"],
+      "owner_team": "billing"
+    },
+    "denial_reason_code": {
+      "canonical": "denial_reason_code",
+      "synonyms": ["reason_code", "carc", "rejection_code"],
+      "definition": "X12 standard denial code (96 = not covered, B7 = missing tooth, 97 = bundled). Mapping this to a plain-language explanation plus a policy citation is the whole job of appeal_specialist.",
+      "data_type": "string",
+      "owner_team": "billing"
+    },
+    "viability_score": {
+      "canonical": "viability_score",
+      "synonyms": ["appeal_viability", "overturn_likelihood"],
+      "definition": "Estimated probability (0-1) that an appeal of this denial is overturned. Above 0.40 recommend, 0.20-0.40 escalate. A well-documented D7953 bundling appeal sits near 0.65.",
+      "data_type": "float",
+      "range": [0.0, 1.0],
+      "owner_team": "billing"
+    },
+    "appeal_deadline": {
+      "canonical": "appeal_deadline",
+      "synonyms": ["appeal_by", "appeal_due_date"],
+      "definition": "Last date an appeal may be filed, typically 60-180 days from denial. Inside 14 days escalates as a deadline warning; past it, blocks.",
+      "data_type": "date",
+      "owner_team": "billing"
+    },
+    "image_quality": {
+      "canonical": "image_quality",
+      "synonyms": ["radiograph_quality", "scan_quality"],
+      "definition": "Diagnostic quality of a radiograph. SUBOPTIMAL escalates to a human because a measurement taken off a poor image is not defensible to a payer medical director.",
+      "data_type": "string",
+      "allowed_values": ["DIAGNOSTIC", "SUBOPTIMAL", "NON_DIAGNOSTIC"],
+      "owner_team": "dentist"
+    }
+  },
+
+  "confidence_floors": {
+    "_description": "There is no single confidence floor in dental-simulator. There are two, answering different questions. See dental-os docs/PRD.md Known Gap #5.",
+    "AI_FALLBACK_FLOOR": {
+      "value": 0.6,
+      "question": "Is this bad enough that Claude should look at it?",
+      "defined_in": "core/documents/extractors/base.py:21",
+      "used_by": ["xray_extractor.py", "perio_extractor.py", "clinical_note_extractor.py", "pred_letter_extractor.py"]
+    },
+    "TRUST_FLOOR": {
+      "value": 0.7,
+      "question": "Is this good enough to base a decision on?",
+      "defined_in": "core/ingestion/adapters/pdf_adapter.py:9",
+      "used_by": ["pdf_adapter.py", "domains/dental/assemblers/clinical_assembler.py:10", "scripts/build_scenarios_xlsx.py:118"]
+    },
+    "dental_os_uses": "TRUST_FLOOR",
+    "why": "clinical_assembler.py is what gates evidence into pred_states, and pred_states is the only thing documentation_reviewer reads."
+  },
+
+  "decisions": {
+    "eligibility_analyst": {
+      "purpose": "Verify coverage is active on the treatment date and that the plan will pay anything at all for this case.",
+      "inputs": ["coverage_active", "annual_max_remaining", "waiting_period_met", "implant_coverage", "missing_tooth_clause", "coordination_of_benefits", "member_id"],
+      "outputs": ["eligibility_disposition", "annual_max_remaining", "waiting_period_met"],
+      "persona": "eligibility_analyst",
+      "risk_level": "medium",
+      "mode": "recommend",
+      "wave": 1,
+      "depends_on": []
+    },
+    "provider_credentialing": {
+      "purpose": "Validate the treating provider against NPPES, the OIG LEIE, network status and specialty before anything is submitted under their NPI.",
+      "inputs": ["provider_npi", "nppes_verified", "oig_excluded", "network_status", "specialty", "taxonomy_code"],
+      "outputs": ["credentialing_disposition", "provider_npi_valid", "provider_oig_excluded"],
+      "persona": "provider_credentialing",
+      "risk_level": "high",
+      "mode": "human_approval",
+      "wave": 1,
+      "depends_on": []
+    },
+    "fraud_integrity": {
+      "purpose": "Run the integrity detectors across billed lines and supporting evidence — upcoding, phantom procedures, unbundling, frequency gaming, surface conflicts.",
+      "inputs": ["cdt_code", "tooth_surface", "fee", "payer_allowed", "cdt_codes_noted", "evidence_edges", "frequency_limit"],
+      "outputs": ["integrity_disposition", "detected_anomalies"],
+      "persona": "fraud_integrity",
+      "risk_level": "high",
+      "mode": "human_approval",
+      "wave": 1,
+      "depends_on": []
+    },
+    "coverage_analyst": {
+      "purpose": "Evaluate every billed CDT code against the payer's coverage, bundling, frequency and downgrade rules for this specific plan.",
+      "inputs": ["cdt_code", "tooth_number", "has_bundling_conflict", "downgrade", "frequency_limit", "implant_coverage", "eligibility_disposition"],
+      "outputs": ["coverage_disposition", "has_bundling_conflict", "conflict_count"],
+      "persona": "coverage_analyst",
+      "risk_level": "medium",
+      "mode": "recommend",
+      "wave": 2,
+      "depends_on": ["eligibility_analyst"]
+    },
+    "clinical_reviewer": {
+      "purpose": "Score the clinical evidence against the ADA criteria checklist for each billed procedure and surface the measurement against the threshold.",
+      "inputs": ["bone_loss_mm", "pocket_depth_max", "sites_gte_5mm", "criteria_score", "medical_necessity_met", "image_quality", "credentialing_disposition"],
+      "outputs": ["criteria_score", "medical_necessity_met", "medical_history_flags"],
+      "persona": "clinical_reviewer",
+      "risk_level": "medium",
+      "mode": "recommend",
+      "wave": 2,
+      "depends_on": ["provider_credentialing"]
+    },
+    "documentation_reviewer": {
+      "purpose": "Answer one question — is the packet complete enough to submit? Presence, currency and extraction confidence for every required document.",
+      "inputs": ["document_type", "confidence_score", "received_at", "missing_evidence", "coverage_disposition", "criteria_score"],
+      "outputs": ["documentation_disposition", "missing_evidence"],
+      "persona": "documentation_reviewer",
+      "risk_level": "medium",
+      "mode": "recommend",
+      "wave": 3,
+      "depends_on": ["coverage_analyst", "clinical_reviewer"]
+    },
+    "pre_d_assessment": {
+      "purpose": "Synthesise all Wave 1-3 outputs into a final submission readiness assessment. The dental equivalent of underwriting_decision.",
+      "inputs": ["eligibility_disposition", "coverage_disposition", "criteria_score", "documentation_disposition", "open_conditions", "provider_oig_excluded"],
+      "outputs": ["submission_readiness", "open_conditions"],
+      "persona": "pre_d_assessment",
+      "risk_level": "high",
+      "mode": "human_approval",
+      "wave": 4,
+      "depends_on": ["eligibility_analyst", "coverage_analyst", "clinical_reviewer", "documentation_reviewer"]
+    },
+    "appeal_specialist": {
+      "purpose": "On a denied or pended payer response, analyse the denial reason, estimate appeal viability, and generate the citation-backed appeal packet.",
+      "inputs": ["denial_reason_code", "appeal_deadline", "viability_score", "criteria_score", "bone_loss_mm", "submission_readiness"],
+      "outputs": ["viability_score", "appeal_packet"],
+      "persona": "appeal_specialist",
+      "risk_level": "high",
+      "mode": "human_approval",
+      "wave": 5,
+      "depends_on": ["pre_d_assessment"]
+    },
+    "dso_portfolio_manager": {
+      "purpose": "Cross-location portfolio analytics — denial patterns, revenue at risk, documentation training needs. Advisory only.",
+      "inputs": ["decision", "denial_reason_code", "cdt_code", "total_case_value", "payer_id"],
+      "outputs": ["denial_patterns", "revenue_at_risk", "training_recommendations"],
+      "persona": "dso_portfolio_manager",
+      "risk_level": "low",
+      "mode": "recommend",
+      "wave": 5,
+      "depends_on": []
+    }
+  },
+
+  "ontology": {
+    "description": "Business object model for Accord Dental. The 8 object_types are the system-of-record entities, all owned by dental-simulator and READ-ONLY to dental-os. The catalogue_object_types are reference data loaded by resolvers via rule_loader — no decision reads them directly. The system_object_types are the ONLY tables dental-os writes.",
+
+    "object_types": {
+      "PredRequest": {
+        "object_type_id": "PredRequest",
+        "display_name": "Pre-Determination Request",
+        "description": "The root entity — one dental pre-determination request. Everything else in the model hangs off this. Lifecycle-bound: a resubmission is a NEW PredRequest, never an edit of the prior one. This is the dental equivalent of lending's Application.",
+        "primary_key": "pred_request_id",
+        "source_table": "pred_requests",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "row_count": 35,
+        "id_format": "PRED-SIM-DA-{GROUP}{NN} — e.g. PRED-SIM-DA-A01. See CONTEXT.md RULE 14.",
+        "properties": {
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "patient_id": "string",
+          "provider_npi": "string",
+          "payer_id": "string",
+          "plan_id": "string",
+          "plan_type": "string",
+          "pred_number": "string",
+          "status": "string",
+          "decision": "enum<approved|denied|pended>",
+          "total_case_value": "decimal",
+          "submitted_at": "string",
+          "created_at": "timestamptz",
+          "updated_at": "timestamptz"
+        },
+        "links": [
+          {"name": "submitted_for", "target_object": "Patient", "cardinality": "many_to_one", "direction": "outbound", "semantic_meaning": "submitted for patient — one patient carries many pre-D requests over time"},
+          {"name": "submitted_by", "target_object": "Provider", "cardinality": "many_to_one", "direction": "outbound", "semantic_meaning": "submitted by provider — joined on provider_npi, the providers table's actual key"},
+          {"name": "governed_by", "target_object": "Plan", "cardinality": "many_to_one", "direction": "outbound", "semantic_meaning": "governed by plan — the plan in force determines coverage, waiting periods and the annual maximum"},
+          {"name": "contains", "target_object": "ProcedureLine", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "contains procedures — one line per CDT code per tooth"},
+          {"name": "has_coverage_profile", "target_object": "EligibilityProfile", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "has coverage profile — assembled from the X12 271 response"},
+          {"name": "has_computed_state", "target_object": "PredState", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "has computed state — the assembler output every persona starts from"},
+          {"name": "supported_by", "target_object": "ClinicalEvidence", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "supported by evidence — X-rays, perio charts, notes, cards, payer letters"},
+          {"name": "has_payer_response", "target_object": "PayerResponse", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "has payer response — the approval, denial or pend that comes back"}
+        ],
+        "decisions_that_read_it": [
+          "eligibility_analyst",
+          "provider_credentialing",
+          "fraud_integrity",
+          "coverage_analyst",
+          "clinical_reviewer",
+          "documentation_reviewer",
+          "pre_d_assessment",
+          "appeal_specialist",
+          "dso_portfolio_manager"
+        ]
+      },
+
+      "Patient": {
+        "object_type_id": "Patient",
+        "display_name": "Patient",
+        "description": "The WHO. Persists across pre-D requests and across time. Carries the insurance identity — member_id, group_number, payer_id, enrollment_start — which is what the eligibility check and the member-ID mismatch detection both run against.",
+        "primary_key": "patient_id",
+        "source_table": "patients",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "properties": {
+          "patient_id": "string",
+          "tenant_id": "string",
+          "member_id": "string",
+          "group_number": "string",
+          "first_name": "string",
+          "last_name": "string",
+          "dob": "string",
+          "gender": "string",
+          "plan_id": "string",
+          "payer_id": "string",
+          "secondary_payer_id": "string",
+          "enrollment_start": "date",
+          "active": "boolean"
+        },
+        "links": [
+          {"name": "has_pred_requests", "target_object": "PredRequest", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "has pre-D requests — a patient accumulates them; frequency limits are evaluated across this history"},
+          {"name": "enrolled_in", "target_object": "Plan", "cardinality": "many_to_one", "direction": "outbound", "semantic_meaning": "enrolled in plan — enrollment_start is what the missing tooth clause and waiting periods are measured from"}
+        ],
+        "decisions_that_read_it": ["eligibility_analyst", "coverage_analyst", "clinical_reviewer", "pre_d_assessment"]
+      },
+
+      "Provider": {
+        "object_type_id": "Provider",
+        "display_name": "Provider",
+        "description": "The treating dentist. Carries the credentialing posture that gates the whole submission: an OIG exclusion is an absolute hard stop, an unverified NPI or out-of-network status escalates.",
+        "primary_key": "provider_npi",
+        "primary_key_note": "provider_npi, NOT npi and NOT provider_id — neither column exists. dental-simulator context.md RULE 14.",
+        "source_table": "providers",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "row_count": 3,
+        "properties": {
+          "provider_npi": "string",
+          "tenant_id": "string",
+          "name": "string",
+          "first_name": "string",
+          "last_name": "string",
+          "credential": "string",
+          "specialty": "string",
+          "taxonomy_code": "string",
+          "practice_name": "string",
+          "license_state": "string",
+          "license_expiry": "string",
+          "credentialed": "boolean",
+          "network_status": "enum<in_network|out_of_network>",
+          "out_of_network": "boolean",
+          "oig_excluded": "boolean",
+          "sanctions": "boolean",
+          "nppes_verified": "boolean",
+          "nppes_verified_at": "timestamptz",
+          "source": "string"
+        },
+        "reference_values": {
+          "1134534266": "Dr. Sridhar Chinta — verified against NPPES",
+          "1467573653": "NOT a registered NPI. Never reintroduce."
+        },
+        "links": [
+          {"name": "performs_for", "target_object": "PredRequest", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "performs procedures for — joined on provider_npi"}
+        ],
+        "decisions_that_read_it": ["provider_credentialing", "pre_d_assessment"]
+      },
+
+      "Plan": {
+        "object_type_id": "Plan",
+        "display_name": "Insurance Plan",
+        "description": "The benefit structure in force. Everything the eligibility and coverage decisions gate on lives here — annual maximum, deductibles, waiting periods by category, the implant exclusion, the missing tooth clause, and benefit percentages by service class.",
+        "primary_key": "plan_id",
+        "source_table": "plans",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "properties": {
+          "plan_id": "string",
+          "payer_id": "string",
+          "plan_name": "string",
+          "plan_type": "string",
+          "group_number": "string",
+          "benefit_year_start": "string",
+          "annual_maximum": "decimal",
+          "deductible": "decimal",
+          "deductible_individual": "decimal",
+          "deductible_family": "decimal",
+          "waiting_period_months": "integer",
+          "waiting_period_basic_months": "integer",
+          "waiting_period_major_months": "integer",
+          "waiting_period_implant_months": "integer",
+          "implant_coverage": "boolean",
+          "missing_tooth_clause": "boolean",
+          "benefit_pct_preventive": "decimal",
+          "benefit_pct_basic": "decimal",
+          "benefit_pct_major": "decimal",
+          "benefit_pct_implants": "decimal"
+        },
+        "links": [
+          {"name": "covers", "target_object": "Patient", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "covers patients"},
+          {"name": "governs", "target_object": "PredRequest", "cardinality": "one_to_many", "direction": "outbound", "semantic_meaning": "governs pre-D requests — the plan is what makes a code covered or excluded"}
+        ],
+        "decisions_that_read_it": ["eligibility_analyst", "coverage_analyst"]
+      },
+
+      "ProcedureLine": {
+        "object_type_id": "ProcedureLine",
+        "display_name": "Procedure Line",
+        "description": "One billed CDT code on one tooth. The unit that bundling, frequency, downgrade and upcoding checks all operate on. tooth_number is universal numbering 1-32; tooth_surface is what a fraud_integrity surface_conflict compares against the radiograph.",
+        "primary_key": "procedure_line_id",
+        "primary_key_note": "Surrogate bigint. The natural key is (pred_request_id, line_no).",
+        "natural_key": ["pred_request_id", "line_no"],
+        "source_table": "procedure_lines",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "properties": {
+          "procedure_line_id": "bigint",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "line_no": "integer",
+          "cdt_code": "string",
+          "tooth_number": "integer",
+          "tooth_surface": "string",
+          "arch": "enum<upper|lower>",
+          "quadrant": "enum<UR|UL|LR|LL>",
+          "fee": "decimal",
+          "payer_allowed": "decimal",
+          "requires_pred": "boolean",
+          "description": "string"
+        },
+        "links": [
+          {"name": "belongs_to", "target_object": "PredRequest", "cardinality": "many_to_one", "direction": "inbound", "semantic_meaning": "belongs to pre-D"},
+          {"name": "has_cost_breakdown", "target_object": "CostEstimate", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "has cost breakdown — insurance portion vs patient portion for this line"}
+        ],
+        "decisions_that_read_it": ["coverage_analyst", "fraud_integrity", "documentation_reviewer"]
+      },
+
+      "ClinicalEvidence": {
+        "object_type_id": "ClinicalEvidence",
+        "display_name": "Clinical Evidence",
+        "description": "The document index. One row per piece of supporting evidence, with the fields extracted from it and a confidence in that extraction. 183 rows: 108 with an s3_key (real PDFs) plus 75 structured payloads with no PDF behind them (35 X12_271_RESPONSE, 35 CDT_SUPERBILL, 5 PRED_LETTER_PENDED).",
+        "primary_key": "evidence_id",
+        "source_table": "clinical_evidence",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "row_count": 183,
+        "row_count_note": "183 total, 108 of which have an s3_key. The '108 PDFs' figure quoted elsewhere counts documents, not rows.",
+        "properties": {
+          "evidence_id": "string",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "document_type": "enum<XRAY_PA|XRAY_PAN|CBCT_REPORT|PERIO_CHART|CLINICAL_NOTE|INSURANCE_CARD|PRED_LETTER|PRED_LETTER_PENDED|X12_271_RESPONSE|CDT_SUPERBILL>",
+          "document_category": "string",
+          "tooth_number": "integer",
+          "source_channel": "string",
+          "source_system": "string",
+          "s3_key": "string",
+          "extracted_fields": "jsonb",
+          "confidence_score": "decimal",
+          "extraction_method": "enum<deterministic|ai_vision|caller_supplied|none>",
+          "received_at": "string"
+        },
+        "extracted_fields_schema": {
+          "_description": "extracted_fields is JSONB and its shape depends on document_type. These are the keys the personas read.",
+          "bone_loss_mm": {"type": "decimal", "from": "XRAY_PA"},
+          "bone_loss_pct": {"type": "decimal", "from": "XRAY_PA"},
+          "tooth_number": {"type": "integer", "from": "XRAY_PA"},
+          "image_quality": {"type": "string", "from": "XRAY_PA"},
+          "pocket_depth_max": {"type": "decimal", "from": "PERIO_CHART"},
+          "sites_gte_5mm": {"type": "integer", "from": "PERIO_CHART"},
+          "bleeding_pct": {"type": "decimal", "from": "PERIO_CHART"},
+          "narrative_present": {"type": "boolean", "from": "CLINICAL_NOTE"},
+          "cdt_codes_noted": {"type": "list<string>", "from": "CLINICAL_NOTE"},
+          "bone_volume_mm3": {"type": "decimal", "from": "CBCT_REPORT"},
+          "pred_decision": {"type": "string", "from": "PRED_LETTER"},
+          "pred_number": {"type": "string", "from": "PRED_LETTER"},
+          "member_id": {"type": "string", "from": "INSURANCE_CARD"}
+        },
+        "s3_key_format": "suwanee_smiles/{SCENARIO_ID}/{SCENARIO_ID}_{DOC_TYPE}.pdf — e.g. suwanee_smiles/DA-A01/DA-A01_CLINICAL_NOTE.pdf",
+        "s3_key_note": "The S3 prefix uses the BARE scenario id (DA-A01), not the pred_request_id (PRED-SIM-DA-A01). Strip the PRED-SIM- prefix when building a key.",
+        "links": [
+          {"name": "supports", "target_object": "PredRequest", "cardinality": "many_to_one", "direction": "inbound", "semantic_meaning": "supports pre-D"},
+          {"name": "represented_as", "target_object": "EvidenceNode", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "represented as graph node — typed edges (confirms/corroborates/contradicts) connect nodes and are what fraud_integrity reads"}
+        ],
+        "decisions_that_read_it": ["clinical_reviewer", "documentation_reviewer", "fraud_integrity"]
+      },
+
+      "EligibilityProfile": {
+        "object_type_id": "EligibilityProfile",
+        "display_name": "Eligibility Profile",
+        "description": "Typed columns — not JSONB. Assembled from the X12 271 eligibility response. One row per PredRequest. This is what dental-os eligibility_analyst reads.",
+        "primary_key": "pred_request_id",
+        "source_table": "eligibility_profiles",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "properties": {
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "coverage_active": "boolean",
+          "payer_id": "string",
+          "plan_type": "string",
+          "member_id": "string",
+          "group_number": "string",
+          "enrollment_date": "string",
+          "annual_maximum": "decimal",
+          "annual_maximum_used": "decimal",
+          "annual_maximum_remaining": "decimal",
+          "deductible_total": "decimal",
+          "deductible_met": "decimal",
+          "deductible_remaining": "decimal",
+          "benefit_pct_preventive": "decimal",
+          "benefit_pct_basic": "decimal",
+          "benefit_pct_major": "decimal",
+          "benefit_pct_implants": "decimal",
+          "implant_coverage": "boolean",
+          "ortho_coverage": "boolean",
+          "waiting_period_met": "boolean",
+          "missing_tooth_clause": "boolean",
+          "missing_tooth_clause_confirmed": "boolean",
+          "coordination_of_benefits": "boolean",
+          "pred_required_codes": "jsonb",
+          "conflicts": "jsonb",
+          "confidence": "decimal",
+          "source": "string",
+          "verified_at": "string",
+          "assembled_at": "string"
+        },
+        "naming_traps": {
+          "annual_maximum_remaining": "Spelled in full here. pred_states spells the same concept annual_max_remaining.",
+          "implant_coverage": "Spelled implant_coverage here. pred_states spells it implant_covered.",
+          "missing_tooth_clause": "Two columns here — missing_tooth_clause (present on the plan) and missing_tooth_clause_confirmed (confirmed for THIS tooth). pred_states rolls them into missing_tooth_clause_triggered. Do not treat the three as interchangeable."
+        },
+        "links": [
+          {"name": "describes_coverage_for", "target_object": "PredRequest", "cardinality": "one_to_one", "direction": "inbound", "semantic_meaning": "describes coverage for"}
+        ],
+        "decisions_that_read_it": ["eligibility_analyst", "coverage_analyst", "pre_d_assessment"]
+      },
+
+      "PredState": {
+        "object_type_id": "PredState",
+        "display_name": "Pre-D Computed State",
+        "description": "THE most important entity. Central computed state. dental-simulator assembled this. dental-os reads it. All 9 personas start from PredState. 35 rows: approved=8, denied=7, pended=20.",
+        "primary_key": "pred_request_id",
+        "source_table": "pred_states",
+        "source_repo": "dental-simulator",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "row_count": 35,
+        "decision_distribution": {"approved": 8, "denied": 7, "pended": 20},
+        "properties": {
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "decision": "enum<approved|denied|pended>",
+          "coverage_active": "boolean",
+          "annual_max_remaining": "decimal",
+          "implant_covered": "boolean",
+          "waiting_period_met": "boolean",
+          "missing_tooth_clause_triggered": "boolean",
+          "pred_required": "boolean",
+          "criteria_score": "decimal",
+          "medical_necessity_met": "boolean",
+          "criteria_met_count": "integer",
+          "criteria_total_count": "integer",
+          "clinical_evidence_count": "integer",
+          "missing_evidence": "jsonb",
+          "no_critical_conflicts": "boolean",
+          "has_bundling_conflict": "boolean",
+          "conflict_count": "integer",
+          "conflicts": "jsonb",
+          "open_conditions": "jsonb",
+          "decision_trace": "jsonb",
+          "provider_npi_valid": "boolean",
+          "provider_oig_excluded": "boolean",
+          "provider_specialty": "string",
+          "readiness_flags": "jsonb",
+          "status": "string",
+          "decision_confidence": "decimal",
+          "requires_human_review": "boolean",
+          "auto_decision_eligible": "boolean",
+          "updated_at": "string"
+        },
+        "unwired_columns": {
+          "_description": "Present in the schema, not populated. Known Gap #1. Verified against the live RDS 2026-08-05.",
+          "readiness_flags": "{} — empty JSONB on all 35 rows, NOT null. A truthiness check passes and an is-null check fails; neither tells you it is unwired. The 14 named checks in dental-simulator PRD §12 are specified but never rolled up.",
+          "status": "NULL on all 35 rows.",
+          "decision_confidence": "NULL on all 35 rows."
+        },
+        "decision_trace_shape": {
+          "_description": "Variable-length JSONB array of assembler findings, NOT one entry per persona. DA-A01 carries 9; other cases carry as few as 4. Do not index into it positionally.",
+          "entry_keys": ["dimension", "finding", "evidence"],
+          "example": "{\"dimension\": \"clinical\", \"finding\": \"Radiographic bone loss 4.2mm (35.0% of root support)\", \"evidence\": [\"XRAY-DA-A01-D02\"]}"
+        },
+        "links": [
+          {"name": "is_computed_state_for", "target_object": "PredRequest", "cardinality": "one_to_one", "direction": "inbound", "semantic_meaning": "is computed state for"}
+        ],
+        "decisions_that_read_it": [
+          "eligibility_analyst",
+          "provider_credentialing",
+          "fraud_integrity",
+          "coverage_analyst",
+          "clinical_reviewer",
+          "documentation_reviewer",
+          "pre_d_assessment",
+          "appeal_specialist",
+          "dso_portfolio_manager"
+        ]
+      }
+    },
+
+    "catalogue_object_types": {
+      "_description": "Reference data. No decisions_that_read_it — resolvers load these via rule_loader and the context enricher attaches the resolved thresholds to the persona bundle. A persona NEVER queries these directly (see CONTEXT.md RULE 4 and RULE 5). Row counts verified against the live RDS 2026-08-05.",
+
+      "CdtCode": {
+        "object_type_id": "CdtCode",
+        "display_name": "CDT Code Catalogue",
+        "description": "ADA Current Dental Terminology procedure codes with descriptions and service categories. The vocabulary every procedure line is written in.",
+        "source_table": "cdt_codes",
+        "source_repo": "dental-simulator",
+        "row_count": 181,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["coverage_analyst", "fraud_integrity", "documentation_reviewer"]
+      },
+      "AdaGuideline": {
+        "object_type_id": "AdaGuideline",
+        "display_name": "ADA Clinical Guideline",
+        "description": "Clinical criteria checklists per procedure with per-criterion weights and thresholds. Layer 1 of the rule hierarchy — the clinical floor that neither payer rules nor the tenant overlay may drop below.",
+        "source_table": "ada_guidelines",
+        "source_repo": "dental-simulator",
+        "row_count": 10,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["clinical_reviewer", "documentation_reviewer", "appeal_specialist"]
+      },
+      "BundlingRule": {
+        "object_type_id": "BundlingRule",
+        "display_name": "Bundling Rule",
+        "description": "Which CDT codes cannot be billed separately, and whether the bundle is separable with documentation. bundling_separable is the single field that decides whether coverage_analyst escalates or blocks. D7953-with-D6010 is separable; D2950-with-a-crown is not.",
+        "source_table": "bundling_rules",
+        "source_repo": "dental-simulator",
+        "row_count": 20,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["coverage_analyst", "fraud_integrity", "appeal_specialist"]
+      },
+      "FrequencyLimit": {
+        "object_type_id": "FrequencyLimit",
+        "display_name": "Frequency Limit",
+        "description": "How often each code is payable, scoped per_tooth | per_quadrant | per_arch | per_patient. The 1-per-5-years-per-tooth limits are why coverage_analyst and fraud_integrity both carry 1825-day context windows.",
+        "source_table": "frequency_limits",
+        "source_repo": "dental-simulator",
+        "row_count": 27,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["coverage_analyst", "fraud_integrity"]
+      },
+      "DowngradeMatrix": {
+        "object_type_id": "DowngradeMatrix",
+        "display_name": "Downgrade Matrix",
+        "description": "What the payer will actually reimburse instead of the code billed (D2740 → D2750, D6065 → D2750). Not a denial — a lower payment the patient must be told about before treatment begins.",
+        "source_table": "downgrade_matrix",
+        "source_repo": "dental-simulator",
+        "row_count": 9,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["coverage_analyst"]
+      },
+      "ConditionsLibrary": {
+        "object_type_id": "ConditionsLibrary",
+        "display_name": "Conditions Library",
+        "description": "Global condition-code catalogue. Each entry carries code | category | template_text with ${variable} slots | payer_citation | sla_hours | assignee | recommended_action. This is what turns a signal into a sentence a human can act on.",
+        "source_table": "conditions_library",
+        "source_repo": "dental-simulator",
+        "row_count": 50,
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["eligibility_analyst", "coverage_analyst", "clinical_reviewer", "documentation_reviewer", "pre_d_assessment", "appeal_specialist"]
+      },
+      "CoverageRule": {
+        "object_type_id": "CoverageRule",
+        "display_name": "Payer Coverage Rule",
+        "description": "Per-payer CDT coverage: covered, benefit percentage, pre-D required, tooth eligibility. Primary key is payer_id + cdt_code — the same code carries different rules per payer, which is what DA-C06/C07 exercise. Layer 2 of the rule hierarchy.",
+        "source_table": "coverage_rules",
+        "source_repo": "dental-simulator",
+        "row_count": 14,
+        "row_count_note": "Only 14 rows. Enough to drive the 35 scenarios, NOT enough to run a real practice. Known Gap #4.",
+        "dental_os_reads": true,
+        "dental_os_writes": false,
+        "loaded_by": "rule_loader",
+        "feeds_decisions": ["eligibility_analyst", "coverage_analyst", "appeal_specialist"]
+      }
+    },
+
+    "system_object_types": {
+      "_description": "Runtime artifacts produced by the dental-os decision pipeline. These are the ONLY objects dental-os writes — dental_os_writes: true. They live in dental-os tables created by migrations/002_dental_os_tables.sql, never in dental-simulator tables.",
+
+      "DecisionOutput": {
+        "object_type_id": "DecisionOutput",
+        "display_name": "Decision Output",
+        "description": "One row per decision per pre-D per evaluation pass. Append-only and versioned — a re-run adds a row, never mutates one. Carries the human action, so an AI recommendation and the human's disposition of it are both permanently visible.",
+        "primary_key": "decision_output_id",
+        "source_table": "decision_outputs",
+        "source_repo": "dental-os",
+        "dental_os_reads": true,
+        "dental_os_writes": true,
+        "properties": {
+          "decision_output_id": "uuid",
+          "decision_id": "string",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "outcome": "enum<recommend|escalate|block>",
+          "mode": "enum<recommend|human_approval>",
+          "wave": "integer",
+          "confidence": "decimal",
+          "boundary_rule": "string",
+          "signals_emitted": "list<string>",
+          "reasoning": "jsonb",
+          "bundle_id": "uuid",
+          "human_action": "enum<approved|overridden|escalated|null>",
+          "human_reviewer": "string",
+          "human_override_reason": "string",
+          "emitted_at": "timestamptz"
+        },
+        "outcome_note": "There is no 'allow' outcome. recommend is the ceiling — decisions.yaml has no automate_if clause and no auto_execute mode.",
+        "links": [
+          {"name": "explains", "target_object": "PredState", "cardinality": "many_to_one", "direction": "outbound", "semantic_meaning": "explains the computed state — reads it, never writes it"},
+          {"name": "snapshot_in", "target_object": "PersonaBundle", "cardinality": "one_to_one", "direction": "outbound", "semantic_meaning": "the frozen bundle this decision was computed from"}
+        ]
+      },
+      "PersonaBundle": {
+        "object_type_id": "PersonaBundle",
+        "display_name": "Persona Bundle",
+        "description": "Frozen snapshot of exactly what a persona saw — entity values, evidence quality, resolved catalogue thresholds, upstream dispositions. Written AFTER decision_outputs commits, in the same transaction. Enables audit, replay and appeal defence. Never read during a live run.",
+        "primary_key": "bundle_id",
+        "source_table": "persona_bundles",
+        "source_repo": "dental-os",
+        "dental_os_reads": true,
+        "dental_os_writes": true,
+        "properties": {
+          "bundle_id": "uuid",
+          "decision_id": "string",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "entity_snapshot": "jsonb",
+          "evidence_snapshot": "jsonb",
+          "rules_snapshot": "jsonb",
+          "upstream_snapshot": "jsonb",
+          "is_current": "boolean",
+          "version": "integer",
+          "created_at": "timestamptz"
+        }
+      },
+      "AppealPacket": {
+        "object_type_id": "AppealPacket",
+        "display_name": "Appeal Packet",
+        "description": "The generated appeal: the payer policy clause applied, the ADA guideline supporting the procedure, the chart documentation meeting criteria, and the measurement that clears the threshold. Produced by appeal_specialist, sent only after a human signs.",
+        "primary_key": "appeal_packet_id",
+        "source_table": "appeal_packets",
+        "source_repo": "dental-os",
+        "dental_os_reads": true,
+        "dental_os_writes": true,
+        "properties": {
+          "appeal_packet_id": "uuid",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "denial_reason_code": "string",
+          "viability_score": "decimal",
+          "policy_citation": "string",
+          "ada_citation": "string",
+          "supporting_evidence_ids": "list<string>",
+          "narrative": "text",
+          "appeal_deadline": "date",
+          "status": "enum<draft|approved_to_send|submitted|overturned|upheld>",
+          "approved_by": "string",
+          "generated_at": "timestamptz"
+        },
+        "note": "dental-simulator has an appeals table with no logic behind it (Known Gap #3). This is the dental-os side that will populate the equivalent."
+      },
+      "ProviderFeedback": {
+        "object_type_id": "ProviderFeedback",
+        "display_name": "Provider Feedback",
+        "description": "A human override captured as a learning signal for the originating persona. Retained for reflection.retention_days (365) and replayed to the same persona on the next similar case. This is how the system improves without retraining.",
+        "primary_key": "feedback_id",
+        "source_table": "provider_feedback",
+        "source_repo": "dental-os",
+        "dental_os_reads": true,
+        "dental_os_writes": true,
+        "properties": {
+          "feedback_id": "uuid",
+          "decision_id": "string",
+          "persona": "string",
+          "pred_request_id": "string",
+          "tenant_id": "string",
+          "override_reason": "string",
+          "override_reason_code": "string",
+          "reviewer_role": "enum<front_desk|billing|dentist|dso_manager>",
+          "original_ai_recommendation": "enum<recommend|escalate|block>",
+          "captured_at": "timestamptz",
+          "expires_at": "timestamptz"
+        }
+      }
+    }
+  },
+
+  "dependency_graph": {
+    "eligibility_analyst": [],
+    "provider_credentialing": [],
+    "fraud_integrity": [],
+    "coverage_analyst": ["eligibility_analyst"],
+    "clinical_reviewer": ["provider_credentialing"],
+    "documentation_reviewer": ["coverage_analyst", "clinical_reviewer"],
+    "pre_d_assessment": ["eligibility_analyst", "coverage_analyst", "clinical_reviewer", "documentation_reviewer"],
+    "appeal_specialist": ["pre_d_assessment"],
+    "dso_portfolio_manager": []
+  },
+
+  "execution_order": {
+    "_description": "Five waves. Everything inside a wave runs in parallel; a wave starts only when the previous wave has settled. This replaces lending's parallel_independent / sequential_dependent split.",
+    "wave_1": ["eligibility_analyst", "provider_credentialing", "fraud_integrity"],
+    "wave_2": ["coverage_analyst", "clinical_reviewer"],
+    "wave_3": ["documentation_reviewer"],
+    "wave_4": ["pre_d_assessment"],
+    "wave_5": ["appeal_specialist", "dso_portfolio_manager"]
+  },
+
+  "document_types": {
+    "_description": "Doc-type → decision permission matrix. The context enricher uses this to filter which document-derived fields appear in each decision's bundle. ObjectType-level permission on ClinicalEvidence is open to the three decisions that read it; the FINE-grained gating lives here. The keys are the actual document_type values present in clinical_evidence on the live RDS.",
+
+    "XRAY_PA": {
+      "label": "Periapical radiograph",
+      "feeds_decisions": ["clinical_reviewer", "documentation_reviewer", "fraud_integrity", "appeal_specialist"],
+      "claims": ["bone_loss_mm", "bone_loss_pct", "tooth_number", "pathology", "image_quality", "date_taken"],
+      "note": "The single most load-bearing document in the product. bone_loss_mm ≥ 3.0 is what unbundles D7953."
+    },
+    "XRAY_PAN": {
+      "label": "Panoramic radiograph",
+      "feeds_decisions": ["clinical_reviewer", "documentation_reviewer"],
+      "claims": ["full_arch_overview", "bone_levels", "missing_teeth", "date_taken"]
+    },
+    "CBCT_REPORT": {
+      "label": "3D cone-beam CT report",
+      "feeds_decisions": ["clinical_reviewer", "documentation_reviewer", "appeal_specialist"],
+      "claims": ["bone_volume_mm3", "bone_density", "implant_site_analysis", "date"],
+      "note": "Optional for D6010/D7953 criteria but raises the approval rate — a 0.10-0.20 weight in the ADA checklist."
+    },
+    "PERIO_CHART": {
+      "label": "Full-mouth periodontal chart",
+      "feeds_decisions": ["clinical_reviewer", "documentation_reviewer", "fraud_integrity"],
+      "claims": ["pocket_depth_max", "sites_gte_5mm", "bleeding_pct", "bone_loss_pct", "exam_date"],
+      "note": "Currency window is 6 months, not the 12 that applies to radiographs."
+    },
+    "CLINICAL_NOTE": {
+      "label": "SOAP clinical note",
+      "feeds_decisions": ["clinical_reviewer", "documentation_reviewer", "fraud_integrity", "appeal_specialist"],
+      "claims": ["chief_complaint", "diagnosis", "treatment_plan", "narrative_present", "cdt_codes_noted", "provider_npi", "visit_date"],
+      "note": "cdt_codes_noted vs the billed cdt_code is the upcoding detector. A mismatch is far more often a charting slip than fraud."
+    },
+    "INSURANCE_CARD": {
+      "label": "Insurance card",
+      "feeds_decisions": ["eligibility_analyst", "documentation_reviewer"],
+      "claims": ["member_id", "group_number", "plan_name", "payer_id", "effective_date"],
+      "note": "member_id here vs member_id on the X12_271_RESPONSE is the member-ID mismatch check."
+    },
+    "X12_271_RESPONSE": {
+      "label": "X12 271 eligibility response",
+      "feeds_decisions": ["eligibility_analyst", "coverage_analyst", "documentation_reviewer"],
+      "claims": ["coverage_active", "annual_maximum", "annual_maximum_remaining", "deductible_remaining", "benefit_pct_implants", "implant_coverage", "waiting_period_met", "missing_tooth_clause", "coordination_of_benefits", "pred_required_codes"],
+      "note": "35 rows, one per scenario. No s3_key — structured payload, no PDF."
+    },
+    "CDT_SUPERBILL": {
+      "label": "CDT superbill / treatment plan export",
+      "feeds_decisions": ["coverage_analyst", "fraud_integrity", "documentation_reviewer"],
+      "claims": ["cdt_codes", "tooth_numbers", "surfaces", "fees", "provider_npi"],
+      "note": "35 rows, one per scenario. No s3_key — structured payload from the PMS, no PDF."
+    },
+    "PRED_LETTER": {
+      "label": "Pre-determination response letter",
+      "feeds_decisions": ["appeal_specialist", "dso_portfolio_manager"],
+      "claims": ["pred_decision", "pred_number", "approved_codes", "approved_amount", "denial_reason_code", "denial_reason_text", "appeal_deadline", "valid_from", "valid_to"]
+    },
+    "PRED_LETTER_PENDED": {
+      "label": "Pre-determination pend letter",
+      "feeds_decisions": ["appeal_specialist", "documentation_reviewer", "dso_portfolio_manager"],
+      "claims": ["pend_checklist", "additional_info_required", "response_deadline"],
+      "note": "5 rows. Distinct document_type from PRED_LETTER on the live RDS — do not fold the two together."
+    }
+  }
+}
