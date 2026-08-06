@@ -9,3 +9,30 @@ body,
 #root {
   height: 100%;
 }
+
+/* ── Print: emit only the patient benefit summary ──────────────────
+   BenefitSummary renders a .print-only sheet that is hidden on screen.
+   On paper the reverse holds: everything else collapses so the sidebar,
+   top bar and cost table do not land on the page a patient takes home.
+   Doing this in CSS rather than a PDF library keeps the dependency
+   count at zero and makes the browser's own preview authoritative. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-only,
+  .print-only * {
+    visibility: visible;
+  }
+  .print-only {
+    display: block !important;
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 16px;
+    width: 100%;
+  }
+  @page {
+    margin: 12mm;
+  }
+}
