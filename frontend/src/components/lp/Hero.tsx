@@ -42,9 +42,8 @@ export default function Hero() {
             </h1>
 
             <p className="mt-5 max-w-lg text-lg leading-relaxed text-slate-500">
-              Accord gives dental providers the tools to catch every denial
-              before it happens. Evidence assembled. Policy applied. Decisions
-              explained.
+              From patient check-in to DSO analytics — every signal has a
+              citation, every decision has a trail, and every denial has a fix.
             </p>
 
             <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
