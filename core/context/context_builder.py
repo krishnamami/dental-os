@@ -104,7 +104,8 @@ class ContextBuilder:
             tenant_id,
             """
             SELECT provider_name, provider_npi, credential, specialty,
-                   oig_excluded, nppes_verified, network_status, license_state
+                   oig_excluded, nppes_verified, network_status, license_state,
+                   provider_npi_valid, provider_oig_excluded
             FROM vw_provider_context WHERE pred_request_id = $1
             """,
             pred_request_id,
@@ -238,7 +239,15 @@ class ContextBuilder:
         graph = await self._one(
             tenant_id,
             """
-            SELECT MAX(confirms_count) AS confirms, MAX(contradicts_count) AS contradicts
+            SELECT MAX(confirms_count) AS confirms,
+                   MAX(contradicts_count) AS contradicts,
+                   -- FILTER is required, not cosmetic: array_agg over a
+                   -- NULL array raises "cannot accumulate null arrays",
+                   -- and contradicts_fields is NULL for every scenario
+                   -- with no contradicting edges — which is most of them.
+                   (array_agg(contradicts_fields)
+                      FILTER (WHERE contradicts_fields IS NOT NULL))[1]
+                       AS contradicts_fields
             FROM vw_fraud_context WHERE pred_request_id = $1
             """,
             pred_request_id,
@@ -256,6 +265,23 @@ class ContextBuilder:
             plan_name=header.get("plan_name") or "",
             payer_id=header.get("payer_id") or "",
             state=state,
+            # Prefer the providers table over the assembler's rollup: the
+            # table is the credentialing record, the rollup is a copy.
+            # Fall back to the rollup when the join found no provider.
+            provider_oig_excluded=(
+                provider.get("oig_excluded")
+                if provider.get("oig_excluded") is not None
+                else provider.get("provider_oig_excluded")
+            ),
+            provider_npi_valid=(
+                provider.get("provider_npi_valid")
+                if provider.get("provider_npi_valid") is not None
+                else provider.get("nppes_verified")
+            ),
+            provider_network_status=provider.get("network_status"),
+            provider_specialty=provider.get("specialty"),
+            provider_credential=provider.get("credential"),
+            provider_nppes_verified=provider.get("nppes_verified"),
             decision=header.get("decision") or "",
             criteria_score=criteria_score,
             confidence_label=confidence_label(criteria_score),
@@ -272,6 +298,7 @@ class ContextBuilder:
             payer_response=payer_response,
             confirms_count=int(graph.get("confirms") or 0),
             contradicts_count=int(graph.get("contradicts") or 0),
+            contradicts_fields=list(graph.get("contradicts_fields") or []),
             audit_events=_json(appeal.get("recent_audit_events"), []),
         )
 

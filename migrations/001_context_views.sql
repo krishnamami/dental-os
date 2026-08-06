@@ -437,6 +437,15 @@ SELECT
         AND ee.edge_type = 'contradicts')                AS contradicts_count,
     (SELECT array_agg(DISTINCT ee.relationship_type) FROM evidence_edges ee
       WHERE ee.pred_request_id = pr.pred_request_id)     AS relationship_types,
+    -- WHICH field a contradiction is about decides whether it is an
+    -- integrity concern at all. DA-A01 carries a 'contradicts' edge on
+    -- field='bundling_conflict' — that is the coverage rule firing,
+    -- modelled as a graph edge, not two documents disagreeing about a
+    -- clinical fact. Counting it as fraud would flag the reference
+    -- clean case. fraud_integrity filters on this.
+    (SELECT array_agg(DISTINCT ee.field) FROM evidence_edges ee
+      WHERE ee.pred_request_id = pr.pred_request_id
+        AND ee.edge_type = 'contradicts')                AS contradicts_fields,
 
     ps.has_bundling_conflict,
     ps.conflict_count,

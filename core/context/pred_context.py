@@ -179,6 +179,23 @@ class PredContext:
     clinical_evidence: list[ClinicalEvidence] = field(default_factory=list)
     payer_response: Optional[PayerResponse] = None
 
+    # ── Provider credentialing posture ───────────────────────────────
+    # provider_credentialing reads these directly — it needs no
+    # resolver, and it must not have to query for them (RULE 5).
+    provider_oig_excluded: Optional[bool] = None
+    provider_npi_valid: Optional[bool] = None
+    provider_network_status: Optional[str] = None
+    provider_specialty: Optional[str] = None
+    provider_credential: Optional[str] = None
+    provider_nppes_verified: Optional[bool] = None
+
+    # ── Portfolio aggregate ──────────────────────────────────────────
+    # Populated only when the caller asks for it (dso_portfolio_manager
+    # is the sole consumer). Empty for a normal single-pre-D run, and
+    # the persona degrades to a minimal signal rather than inventing
+    # numbers.
+    portfolio_stats: dict = field(default_factory=dict)
+
     # ── Geography ────────────────────────────────────────────────────
     # Selects the fee schedule. Taken from the treating provider's
     # license_state, since the fee schedule that applies is the one
@@ -191,6 +208,11 @@ class PredContext:
     # ── Knowledge graph summary ──────────────────────────────────────
     confirms_count: int = 0
     contradicts_count: int = 0
+    # Which fields the contradicting edges are about. A contradiction on
+    # 'bundling_conflict' is the coverage rule firing, not two documents
+    # disagreeing — fraud_integrity filters on this rather than counting
+    # every contradicts edge as an integrity concern.
+    contradicts_fields: list = field(default_factory=list)
 
     # ── Upstream persona outputs, populated as waves complete ────────
     upstream_outputs: dict = field(default_factory=dict)
