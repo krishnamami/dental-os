@@ -12,10 +12,11 @@ from domains.dental.personas.documentation_reviewer import DocumentationReviewer
 from domains.dental.personas.dso_portfolio_manager import DSOPortfolioManager
 from domains.dental.personas.eligibility_analyst import EligibilityAnalyst
 from domains.dental.personas.fraud_integrity import FraudIntegrity
+from domains.dental.personas.pre_d_assessment import PreDAssessment
 from domains.dental.personas.provider_credentialing import ProviderCredentialing
 
-# pre_d_assessment (wave 4) is Phase 5 — it synthesises these outputs
-# rather than producing findings of its own.
+# pre_d_assessment (wave 4) synthesises the other eight rather than
+# producing findings of its own. Built in Phase 5 alongside the runner.
 PERSONA_CLASSES = (
     EligibilityAnalyst,
     ProviderCredentialing,
@@ -23,6 +24,7 @@ PERSONA_CLASSES = (
     CoverageAnalyst,
     ClinicalReviewer,
     DocumentationReviewer,
+    PreDAssessment,
     AppealSpecialist,
     DSOPortfolioManager,
 )
@@ -44,6 +46,7 @@ __all__ = [
     "EligibilityAnalyst",
     "FraudIntegrity",
     "PERSONA_CLASSES",
+    "PreDAssessment",
     "ProviderCredentialing",
     "VALID_MODES",
     "WAVES",
