@@ -104,11 +104,17 @@ class ContextBuilder:
             tenant_id,
             """
             SELECT provider_name, provider_npi, credential, specialty,
-                   oig_excluded, nppes_verified, network_status
+                   oig_excluded, nppes_verified, network_status, license_state
             FROM vw_provider_context WHERE pred_request_id = $1
             """,
             pred_request_id,
         ) or {}
+
+        # The fee schedule that applies is the one where the service is
+        # rendered, so state comes off the treating provider's licence.
+        # Falls back to GA — the design partner's state, and the only
+        # one whose rates trace to a published schedule.
+        state = (provider.get("license_state") or "GA").strip().upper()[:2] or "GA"
 
         eligibility = EligibilityProfile(
             coverage_active=_b(header.get("coverage_active")),
@@ -242,6 +248,7 @@ class ContextBuilder:
             provider_npi=provider.get("provider_npi") or header.get("provider_npi") or "",
             plan_name=header.get("plan_name") or "",
             payer_id=header.get("payer_id") or "",
+            state=state,
             decision=header.get("decision") or "",
             criteria_score=criteria_score,
             confidence_label=confidence_label(criteria_score),

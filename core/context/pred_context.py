@@ -172,6 +172,15 @@ class PredContext:
     clinical_evidence: list[ClinicalEvidence] = field(default_factory=list)
     payer_response: Optional[PayerResponse] = None
 
+    # ── Geography ────────────────────────────────────────────────────
+    # Selects the fee schedule. Taken from the treating provider's
+    # license_state, since the fee schedule that applies is the one
+    # where the service is rendered. Defaults to GA — the design
+    # partner's state and the only one whose rates trace to a published
+    # source. Every other state's rates are estimated; see
+    # catalogue_rules['fee_schedules'][code]['is_estimated'].
+    state: str = "GA"
+
     # ── Knowledge graph summary ──────────────────────────────────────
     confirms_count: int = 0
     contradicts_count: int = 0

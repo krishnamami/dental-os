@@ -59,6 +59,7 @@ class ContextEnricher:
                     conn,
                     tenant_id=tenant_id,
                     payer_id=context.payer_id or "delta_dental",
+                    state=context.state or "GA",
                 )
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)

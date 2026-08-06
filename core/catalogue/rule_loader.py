@@ -194,9 +194,18 @@ async def load_dental_rules(
     conn: asyncpg.Connection,
     tenant_id: str,
     payer_id: str = "delta_dental",
+    state: str = "GA",
 ) -> dict:
     """
     Load all catalogue rules for one pre-D evaluation.
+
+    `state` selects the fee schedule. Only GA traces to a published
+    source (SPA GA-25-0005); the other six states are GA amounts scaled
+    by a judgement multiplier, and every such row carries
+    source='{state}_medicaid_estimated' so a caller can tell. The
+    fee_schedules section stamps `is_estimated` per code for exactly
+    that reason — a patient cost quote built on an estimated rate must
+    not be presented as the payer's allowed amount.
 
     Returns a structured dict — personas read from this, never from the
     DB directly (RULE 5). Never raises: a table that is empty or missing
@@ -215,14 +224,15 @@ async def load_dental_rules(
     """
     if not conn.is_in_transaction():
         async with conn.transaction():
-            return await _load(conn, tenant_id, payer_id)
-    return await _load(conn, tenant_id, payer_id)
+            return await _load(conn, tenant_id, payer_id, state)
+    return await _load(conn, tenant_id, payer_id, state)
 
 
 async def _load(
     conn: asyncpg.Connection,
     tenant_id: str,
     payer_id: str,
+    state: str = "GA",
 ) -> dict:
     await conn.execute("SELECT set_config('app.tenant_id', $1, true)", tenant_id)
 
@@ -242,6 +252,7 @@ async def _load(
         "_meta": {
             "tenant_id": tenant_id,
             "payer_id": payer_id,
+            "state": state,
             "layers": {
                 LAYER_ADA: "ada_guidelines (clinical floor, cannot be overridden)",
                 LAYER_PAYER: "payer rules (coverage / bundling / frequency / downgrade)",
@@ -452,6 +463,91 @@ async def _load(
         }
     rules["coverage_rules"] = coverage
     _warn_if_empty(rules, "coverage_rules", "coverage_rules")
+
+    # ── Layer 2: fee schedule for THIS payer in THIS state ───────────
+    # is_estimated is the load-bearing field. GA rows trace to SPA
+    # GA-25-0005; every other state is that GA amount times a
+    # multiplier. A cost estimate built on an estimated rate must be
+    # labelled as such before it reaches a patient.
+    fees: dict[str, dict] = {}
+    for r in await conn.fetch(
+        """
+        SELECT cdt_code, payer_id, plan_type, state, allowed_amount,
+               effective_date, source, zip_code
+        FROM fee_schedules
+        WHERE payer_id = $1 AND state = $2
+        ORDER BY cdt_code
+        """,
+        payer_id,
+        state,
+    ):
+        source = r["source"] or ""
+        fees[r["cdt_code"]] = {
+            "allowed_amount": _num(r["allowed_amount"]),
+            "plan_type": r["plan_type"],
+            "state": r["state"],
+            "zip_code": r["zip_code"],
+            "effective_date": r["effective_date"],
+            "source": source,
+            "is_estimated": source == "estimated" or source.endswith("_medicaid_estimated"),
+            "is_derived_from_ga": source.endswith("_medicaid_estimated"),
+            "payer_id": r["payer_id"],
+            "governed_by": "payer",
+            "layer": LAYER_PAYER,
+        }
+    rules["fee_schedules"] = fees
+    if not fees:
+        rules["_meta"]["missing_sections"].append("fee_schedules")
+        logger.warning(
+            "CATALOGUE EMPTY: no fee_schedules rows for payer=%r state=%r. "
+            "Cost estimates will have no allowed amount to work from. Run "
+            "dental-simulator scripts/pull_fee_schedules.py --all-states.",
+            payer_id,
+            state,
+        )
+    elif any(f["is_estimated"] for f in fees.values()):
+        est = sum(1 for f in fees.values() if f["is_estimated"])
+        logger.info(
+            "fee_schedules for state=%s: %d of %d rates are ESTIMATED, not "
+            "sourced. Do not present these as the payer's allowed amount.",
+            state,
+            est,
+            len(fees),
+        )
+
+    # ── Catalogue provenance ─────────────────────────────────────────
+    # What version of each catalogue this decision was made against.
+    # Stamped into the rules so persona_bundles freezes it and a replay
+    # months later can tell whether the rules have moved underneath it.
+    versions: dict[str, dict] = {}
+    try:
+        for r in await conn.fetch(
+            """
+            SELECT catalogue_name, version, effective_date, source,
+                   loaded_at, loaded_by, row_count, states
+            FROM catalogue_versions
+            ORDER BY catalogue_name
+            """
+        ):
+            versions[r["catalogue_name"]] = {
+                "version": r["version"],
+                "effective_date": r["effective_date"],
+                "source": r["source"],
+                "loaded_at": r["loaded_at"],
+                "loaded_by": r["loaded_by"],
+                "row_count": r["row_count"],
+                "states": list(r["states"] or []),
+            }
+    except asyncpg.PostgresError as exc:
+        # Older dental-simulator deployments predate this table. Absent
+        # provenance is a gap to report, not a reason to fail a decision.
+        logger.warning(
+            "catalogue_versions unavailable (%s). Decisions will carry no "
+            "catalogue provenance. Apply the table from "
+            "dental-simulator infra/schema.sql.",
+            type(exc).__name__,
+        )
+    rules["catalogue_versions"] = versions
 
     # ── Conditions library ───────────────────────────────────────────
     conditions: dict[str, dict] = {}
