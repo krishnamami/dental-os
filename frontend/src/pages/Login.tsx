@@ -65,7 +65,7 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="text-center">
           <Link to="/" className="inline-block">
-            <Logo className="text-[19px]" />
+            <Logo size={34} />
           </Link>
           <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.01em] text-gray-900">
             Sign in to Accord Dental

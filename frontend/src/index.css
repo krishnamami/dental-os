@@ -10,6 +10,17 @@ body,
   height: 100%;
 }
 
+body {
+  font-family:
+    "Plus Jakarta Sans",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
 /* ── Print: emit only the patient benefit summary ──────────────────
    BenefitSummary renders a .print-only sheet that is hidden on screen.
    On paper the reverse holds: everything else collapses so the sidebar,

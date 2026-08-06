@@ -41,7 +41,7 @@ export default function Footer() {
       <Container className="py-12">
         <div className="grid grid-cols-2 gap-8 md:grid-cols-5">
           <div className="col-span-2 md:col-span-1">
-            <Logo />
+            <Logo size={28} />
             <p className="mt-3 max-w-[240px] text-[12.5px] leading-relaxed text-gray-500">
               The Dental Decision Intelligence Platform. Evidence assembled.
               Policy applied. Decisions explained.

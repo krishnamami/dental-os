@@ -48,7 +48,7 @@ export default function AppShell() {
         <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white lg:flex">
           <div className="flex h-[52px] items-center border-b border-gray-200 px-4">
             <Link to={demoLink("/")}>
-              <Logo />
+              <Logo size={28} />
             </Link>
           </div>
 

@@ -3,6 +3,18 @@ export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        // Overrides Tailwind's default sans stack, so every `font-sans`
+        // and every unstyled element inherits it.
+        sans: [
+          "Plus Jakarta Sans",
+          "ui-sans-serif",
+          "system-ui",
+          "-apple-system",
+          "Segoe UI",
+          "sans-serif",
+        ],
+      },
       colors: {
         // Accord brand. Green carries "approved / covered / verified",
         // amber carries "needs a human". Nothing in the product uses
