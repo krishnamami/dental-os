@@ -74,6 +74,10 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Collapsed on load. Eleven working credentials — one of them an
+  // admin that can impersonate anyone — should not be the first thing
+  // on the page. Someone who needs them knows to look.
+  const [showDemo, setShowDemo] = useState(false);
 
   const from = (location.state as { from?: string } | null)?.from;
 
@@ -191,52 +195,61 @@ export default function Login() {
 
         {/* ── Demo accounts ─────────────────────────────────────── */}
         <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
-          <p className="text-[12px] font-semibold text-gray-900">
-            Demo accounts{" "}
-            <span className="font-normal text-gray-500">
-              · password: <code className="font-mono">demo2026</code>
-            </span>
-          </p>
-          <p className="mt-1 text-[11px] text-gray-400">
-            Click a name to fill the email. Every account reads the same
-            synthetic corpus.
-          </p>
+          <button
+            type="button"
+            onClick={() => setShowDemo((v) => !v)}
+            aria-expanded={showDemo}
+            aria-controls="demo-accounts"
+            className="flex items-center gap-1 text-sm text-slate-500 transition hover:text-slate-700"
+          >
+            <span aria-hidden="true">{showDemo ? "▾" : "▸"}</span>
+            Demo accounts · password: demo2026
+          </button>
 
-          {DEMO_GROUPS.map((g) => (
-            <div key={g.tenant} className="mt-3.5">
-              <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-gray-400">
-                {g.tenant}
+          {showDemo && (
+            <div id="demo-accounts">
+              <p className="mt-2 text-[11px] text-gray-400">
+                Click a name to fill the email. Every account reads the same
+                synthetic corpus.
               </p>
-              <ul className="divide-y divide-gray-100">
-                {g.users.map((u) => {
-                  const badge = ROLE_BADGE[u.role];
-                  return (
-                    <li key={u.email}>
-                      <button
-                        type="button"
-                        onClick={() => fill(u.email)}
-                        className="flex w-full items-center gap-2 rounded px-1.5 py-2 text-left transition hover:bg-gray-50"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[12.5px] font-medium text-gray-800">
-                            {u.name}
-                          </span>
-                          <span className="block truncate font-mono text-[10.5px] text-gray-400">
-                            {u.email}
-                          </span>
-                        </span>
-                        <span
-                          className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-semibold ${badge.cls}`}
-                        >
-                          {badge.label}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+
+              {DEMO_GROUPS.map((g) => (
+                <div key={g.tenant} className="mt-3.5">
+                  <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-gray-400">
+                    {g.tenant}
+                  </p>
+                  <ul className="divide-y divide-gray-100">
+                    {g.users.map((u) => {
+                      const badge = ROLE_BADGE[u.role];
+                      return (
+                        <li key={u.email}>
+                          <button
+                            type="button"
+                            onClick={() => fill(u.email)}
+                            className="flex w-full items-center gap-2 rounded px-1.5 py-2 text-left transition hover:bg-gray-50"
+                          >
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[12.5px] font-medium text-gray-800">
+                                {u.name}
+                              </span>
+                              <span className="block truncate font-mono text-[10.5px] text-gray-400">
+                                {u.email}
+                              </span>
+                            </span>
+                            <span
+                              className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-semibold ${badge.cls}`}
+                            >
+                              {badge.label}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                      </ul>
+                    </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
 
         <p className="mt-6 text-center text-[12.5px] text-gray-500">
