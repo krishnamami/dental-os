@@ -41,11 +41,13 @@ USERS: list[tuple[str, str, str, str | None]] = [
     ("billing@suwaneesmiles.com", "Kim B.", "revenue_ops", "suwanee_smiles"),
     ("drchinta@suwaneesmiles.com", "Dr. Sridhar Chinta", "dentist", "suwanee_smiles"),
     ("drshyam@suwaneesmiles.com", "Dr. Shyam Patel", "dso_owner", "suwanee_smiles"),
+    ("tc@suwaneesmiles.com", "Jennifer M.", "tx_coord", "suwanee_smiles"),
     # Tampa Bay Smiles — FL
     ("sarah@tampabaysmiles.com", "Sarah T.", "front_desk", "tampa_smiles"),
     ("billing@tampabaysmiles.com", "Kim T.", "revenue_ops", "tampa_smiles"),
     ("drrodriguez@tampabaysmiles.com", "Dr. Maria Rodriguez", "dentist", "tampa_smiles"),
     ("drshyam@tampabaysmiles.com", "Dr. Shyam Patel", "dso_owner", "tampa_smiles"),
+    ("tc@tampabaysmiles.com", "Maria C.", "tx_coord", "tampa_smiles"),
     # Dallas Family Dental — TX
     ("billing@dallasfamilydental.com", "Kim D.", "revenue_ops", "dallas_dental"),
     ("drwilson@dallasfamilydental.com", "Dr. James Wilson", "dentist", "dallas_dental"),
@@ -60,7 +62,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   name          TEXT NOT NULL,
   role          TEXT NOT NULL CHECK (role IN (
-                  'front_desk','revenue_ops','dentist',
+                  'front_desk','tx_coord','revenue_ops','dentist',
                   'dso_owner','accord_admin')),
   tenant_id     TEXT,
   active        BOOLEAN DEFAULT true,
