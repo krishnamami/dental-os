@@ -15,7 +15,7 @@ import { useNavigate } from "react-router-dom";
 import { Eye } from "lucide-react";
 
 import { api } from "../hooks/useApi";
-import { statusOf, useAuth } from "../context/AuthContext";
+import { HOME_FOR_ROLE, statusOf, useAuth } from "../context/AuthContext";
 import type { ImpersonatedUser, Role } from "../types/dental";
 
 interface DirectoryUser {
@@ -93,10 +93,8 @@ export default function UserDirectory() {
         role: u.role,
         tenant_id: u.tenant_id,
       };
-      await impersonate(payload);
-      // /app rather than a computed home: the context has only just
-      // been handed the new role, and /app re-reads it a render later.
-      navigate("/app", { replace: true });
+      const now = await impersonate(payload);
+      navigate(HOME_FOR_ROLE[now.role] ?? "/workbench", { replace: true });
     } catch {
       setError(`Could not view as ${u.name}.`);
       setBusy(null);

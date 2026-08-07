@@ -16,7 +16,7 @@ import { useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AccordLogo } from "../components/AccordLogo";
-import { statusOf, useAuth } from "../context/AuthContext";
+import { HOME_FOR_ROLE, statusOf, useAuth } from "../context/AuthContext";
 import type { Role } from "../types/dental";
 
 const ROLE_BADGE: Record<Role, { label: string; cls: string }> = {
@@ -87,11 +87,17 @@ export default function Login() {
     setError("");
     setBusy(true);
     try {
-      await login(email, password);
-      // NOT homeRoute — this component read it before login resolved,
-      // so it still holds the signed-out default. /app re-reads the
-      // role from context and forwards, one render later.
-      navigate(from ?? "/app", { replace: true });
+      // The route comes from the RESPONSE, not from the context's
+      // homeRoute. This closure captured homeRoute during the
+      // signed-out render, where role is null and it reads
+      // "/workbench" — navigating there would put front desk, DSO
+      // owner and admin on the workbench, and because all three hold
+      // the `workbench` product ProductRoute would not even bounce
+      // them. Wrong page, no error.
+      const user = await login(email, password);
+      navigate(from ?? HOME_FOR_ROLE[user.role] ?? "/workbench", {
+        replace: true,
+      });
     } catch (err) {
       // Never echo the server's wording for a bad credential. The API
       // deliberately says the same thing for a wrong password and an

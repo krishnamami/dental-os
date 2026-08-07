@@ -156,9 +156,14 @@ interface AuthState {
   /** Mirrors of effectiveUser — most callers only ever wanted these. */
   role: Role | null;
   tenantId: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  /** Resolves with the authenticated user. Callers need it to decide
+   *  where to go next: `homeRoute` on the context is still the
+   *  signed-out value until React re-renders, so a handler that reads
+   *  it after awaiting login sends everyone to the same page. */
+  login: (email: string, password: string) => Promise<AuthUser>;
   logout: () => void;
-  impersonate: (u: ImpersonatedUser) => Promise<void>;
+  /** Resolves with the impersonated user, for the same reason. */
+  impersonate: (u: ImpersonatedUser) => Promise<AuthUser>;
   stopImpersonating: () => Promise<void>;
   hasProduct: (product: string) => boolean;
   navAllows: (label: string) => boolean;
@@ -253,6 +258,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStored(ORIG_KEY, null);
     setViewAs(null);
     setUser(data.user);
+    return data.user;
   }, []);
 
   const logout = useCallback(() => {
@@ -279,6 +285,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStored(VIEWAS_KEY, JSON.stringify(u));
     setViewAs(u);
     setUser(data.user);
+    return data.user;
   }, []);
 
   const stopImpersonating = useCallback(async () => {
