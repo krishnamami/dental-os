@@ -1,13 +1,15 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Check, Printer } from "lucide-react";
 
 import AnnualMaxBar from "../../../components/AnnualMaxBar";
 import BenefitSummary from "../../../components/BenefitSummary";
 import CostTable from "../../../components/CostTable";
 import CoverageCard from "../../../components/CoverageCard";
+import DetailTopbar from "../../../components/DetailTopbar";
 import DowngradeAlert from "../../../components/DowngradeAlert";
 import PayerComparison from "../../../components/PayerComparison";
+import RequestDocsModal from "../../../components/RequestDocsModal";
 import { usePatientSummary } from "../../../hooks/useApi";
 import { useDemo, useDemoLink } from "../../../hooks/useDemo";
 import { scenarioId } from "../../../utils/format";
@@ -39,14 +41,55 @@ export default function CoverageDetail() {
   const { id } = useParams<{ id: string }>();
   const { isDemo, demoPredId } = useDemo();
   const demoLink = useDemoLink();
+  const navigate = useNavigate();
   const [checkedIn, setCheckedIn] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [toast, setToast] = useState("");
 
   const predRequestId = id ?? (isDemo ? demoPredId : undefined);
   const { data, isLoading, isError, error, refetch } =
     usePatientSummary(predRequestId);
 
   return (
-    <div className="mx-auto max-w-4xl px-5 py-5 sm:px-6">
+    <div className="flex min-h-full flex-col">
+      {/* Breadcrumb + the four things a front desk does with an open
+          record. Rendered whether or not the summary has loaded, so the
+          bar does not appear a beat after the page. */}
+      <DetailTopbar
+        root="Coverage"
+        current={data?.patient_name ?? ""}
+        actions={[
+          {
+            label: "Add note",
+            title: "Demo only — there is no note endpoint yet",
+            disabled: true,
+          },
+          {
+            label: "Request docs",
+            onClick: () => setDocsOpen(true),
+            disabled: !data,
+          },
+          {
+            label: "Print summary",
+            onClick: () => window.print(),
+            disabled: !data,
+          },
+          {
+            label: "View full pre-D",
+            onClick: () =>
+              predRequestId &&
+              navigate(demoLink(`/workbench/${predRequestId}`)),
+            disabled: !predRequestId,
+          },
+        ]}
+        primary={{
+          label: "Submit pre-D",
+          title: "Demo only — submission runs in the product",
+          disabled: true,
+        }}
+      />
+
+      <div className="mx-auto w-full max-w-4xl px-5 py-5 sm:px-6">
       <Link
         to={demoLink("/coverage")}
         className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-gray-500 hover:text-gray-900"
@@ -166,6 +209,28 @@ export default function CoverageDetail() {
               Check-in is remembered in this tab only
             </span>
           </div>
+        </div>
+      )}
+      </div>
+
+      {docsOpen && data && (
+        <RequestDocsModal
+          patientName={data.patient_name}
+          onClose={() => setDocsOpen(false)}
+          onSend={() => {
+            setDocsOpen(false);
+            setToast(`Document request queued for ${data.patient_name} ✓`);
+            window.setTimeout(() => setToast(""), 3000);
+          }}
+        />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-[76px] left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-[12.5px] font-medium text-white shadow-lg lg:bottom-6"
+        >
+          {toast}
         </div>
       )}
     </div>

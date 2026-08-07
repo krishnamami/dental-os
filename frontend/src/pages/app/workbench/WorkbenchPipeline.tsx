@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Diamond, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Check, Diamond, X } from "lucide-react";
 
 import ConditionsPanel from "../../../components/ConditionsPanel";
 import DecisionBadge from "../../../components/DecisionBadge";
+import DetailTopbar from "../../../components/DetailTopbar";
 import EvidenceTimeline, {
   buildTimeline,
   type TimelineNode,
 } from "../../../components/EvidenceTimeline";
 import EvidenceDetailPanel from "../../../components/EvidenceDetailPanel";
 import ReadinessBadge from "../../../components/ReadinessBadge";
+import RequestDocsModal from "../../../components/RequestDocsModal";
 import { toneFor, type SignalTone } from "../../../components/SignalCard";
 import { useAppeal, useConditions, useDecision } from "../../../hooks/useApi";
 import { useDemoLink } from "../../../hooks/useDemo";
@@ -551,6 +554,10 @@ export default function WorkbenchPipeline({
   const [activeWave, setActiveWave] = useState<number | null>(null);
   // Below md the two panels share the screen one at a time.
   const [showDetail, setShowDetail] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
+  const [toast, setToast] = useState("");
+  const navigate = useNavigate();
+  const demoLink = useDemoLink();
 
   const { data: decision, isLoading, isError, error } = useDecision(selectedId);
   const { data: conditions } = useConditions(selectedId);
@@ -656,6 +663,42 @@ export default function WorkbenchPipeline({
           showDetail ? "flex" : "hidden"
         }`}
       >
+        {/* The actions live here, not in the footer. Two Submit
+            buttons on one screen — one greyed by the readiness rule and
+            one not — is worse than none. */}
+        <DetailTopbar
+          root="Pre-D workbench"
+          current={patient}
+          actions={[
+            {
+              label: "Add note",
+              title: "Demo only — there is no note endpoint yet",
+              disabled: true,
+            },
+            { label: "Request docs", onClick: () => setDocsOpen(true) },
+            {
+              label: "Generate appeal",
+              onClick: () => navigate(demoLink(`/revenue-ops/appeals`)),
+              title: appeal?.viable
+                ? "Open the appeal packet in Revenue ops"
+                : "No viable appeal on this pre-D",
+              disabled: !appeal?.viable,
+            },
+            {
+              label: "View evidence",
+              onClick: () =>
+                navigate(demoLink(`/evidence/${selectedId}`)),
+            },
+          ]}
+          primary={{
+            label: "Submit pre-D",
+            title: decision?.submission_ready
+              ? "Demo only — submission runs in the product"
+              : "Blocked until every condition is cleared",
+            disabled: !decision?.submission_ready,
+          }}
+        />
+
         <header className="border-b border-gray-200 bg-white px-4 py-3 sm:px-5">
           <button
             type="button"
@@ -805,38 +848,10 @@ export default function WorkbenchPipeline({
           </p>
 
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={!decision?.submission_ready}
-              title={
-                decision?.submission_ready
-                  ? "Demo only — submission runs in the product"
-                  : "Blocked until every condition is cleared"
-              }
-              className="min-h-[36px] rounded-lg bg-[#1B5E20] px-3.5 text-[12.5px] font-semibold text-white transition hover:bg-[#154d19] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Submit pre-D
-            </button>
-            {/* Demo-only, and labelled as such on hover rather than
-                silently doing nothing when clicked. Wiring these needs a
-                write path the API does not expose yet. */}
-            <button
-              type="button"
-              title="Demo only — narrative capture runs in the product"
-              className="min-h-[36px] rounded-lg border border-gray-300 px-3.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50"
-            >
-              Add narrative
-            </button>
-            {appeal?.viable && (
-              <button
-                type="button"
-                title="Demo only — the drafted letter lives on the appeal endpoint"
-                className="min-h-[36px] rounded-lg border border-gray-300 px-3.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50"
-              >
-                Generate appeal
-                <ArrowRight size={12} className="ml-1.5 inline" />
-              </button>
-            )}
+            {/* Submit, Add note, Generate appeal and View evidence are
+                in the topbar. Override stays here: it is the one action
+                that contradicts the engine, and it belongs next to the
+                readiness line that explains why. */}
             <button
               type="button"
               title="Demo only — an override is recorded as feedback in the product"
@@ -847,6 +862,27 @@ export default function WorkbenchPipeline({
           </div>
         </footer>
       </section>
+
+      {docsOpen && (
+        <RequestDocsModal
+          patientName={patient}
+          onClose={() => setDocsOpen(false)}
+          onSend={() => {
+            setDocsOpen(false);
+            setToast(`Document request queued for ${patient} ✓`);
+            window.setTimeout(() => setToast(""), 3000);
+          }}
+        />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-[76px] left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-[12.5px] font-medium text-white shadow-lg lg:bottom-6"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
