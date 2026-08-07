@@ -1,11 +1,9 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowLeft, Check, Printer, X } from "lucide-react";
 
 import DetailTopbar from "../../../components/DetailTopbar";
 import { useAuth } from "../../../context/AuthContext";
 import { useDecision, usePatientSummary } from "../../../hooks/useApi";
-import { useDemoLink } from "../../../hooks/useDemo";
 import type { Decision, PatientSummary, Signal } from "../../../types/dental";
 import { formatCurrency } from "../../../utils/format";
 
@@ -351,8 +349,6 @@ function CountPill({
 }
 
 export default function CheckIn() {
-  const navigate = useNavigate();
-  const demoLink = useDemoLink();
   const { effectiveUser } = useAuth();
 
   const [selectedId, setSelectedId] = useState(APPOINTMENTS[0].id);
@@ -728,13 +724,6 @@ export default function CheckIn() {
               className="min-h-[42px] rounded-lg border border-gray-300 px-4 text-[13px] font-medium text-gray-700 transition hover:bg-gray-50"
             >
               Notify clinical team
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate(demoLink(`/coverage/${row.id}`))}
-              className="text-[13px] font-medium text-accord-green-900 underline-offset-2 hover:underline"
-            >
-              See full estimate →
             </button>
             <span className="ml-auto text-[10.5px] text-gray-400">
               <Printer size={11} className="mr-1 inline" />

@@ -99,7 +99,10 @@ const ROLE_PRODUCTS: Record<Role, string[]> = {
  * from the other by string munging.
  */
 const ROLE_NAV: Record<Role, string[]> = {
-  front_desk: ["Check-In", "Patient Financial"],
+  // Check-in only. The desk reads today's estimate off the check-in
+  // card itself; the per-procedure breakdown at /coverage belongs to
+  // the treatment coordinator, who has the conversation about it.
+  front_desk: ["Check-In"],
   tx_coord: ["Check-In", "Patient Financial", "Pre-D Workbench"],
   revenue_ops: ["Pre-D Workbench", "Revenue Ops", "Patient Financial"],
   dentist: [
