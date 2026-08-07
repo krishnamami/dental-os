@@ -8,6 +8,18 @@ export default {
         // and every unstyled element inherits it.
         sans: ["Plus Jakarta Sans", "ui-sans-serif", "system-ui", "sans-serif"],
       },
+      animation: {
+        // Replays on every tab/case change — the panel is remounted by
+        // a changing key, so the animation restarts rather than needing
+        // to be reset.
+        "fade-in": "fade-in 0.25s ease",
+      },
+      keyframes: {
+        "fade-in": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
       colors: {
         // Shared with accordlend — one company, one green. `brand` and
         // `accord-green-900` are the same #1B5E20; the palette below
