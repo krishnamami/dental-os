@@ -1,0 +1,23 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+.git
+.gitignore
+*.md
+tests/
+scripts/
+*.xlsx
+
+# The mirrored React app. It is a build input for accorddental, never a
+# runtime import for the API, and shipping it would put the frontend
+# source inside a container that serves patient data.
+frontend/
+
+# Nothing here imports these, and a stray SQL file in the image invites
+# someone to run it against production by hand.
+migrations/
+docs/
+Dockerfile
+.dockerignore

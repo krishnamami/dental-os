@@ -48,6 +48,26 @@ logger = logging.getLogger(__name__)
 VERSION = "0.3.0"
 SERVICE = "accord-dental-os"
 
+# ─────────────────────────────────────────────────────────────────────
+# API_PREFIX — where this app lives in the URL space.
+#
+# Empty in development: uvicorn serves /health and /decisions/{id}, and
+# vite's proxy strips the browser's /api before forwarding.
+#
+# "/api" in ECS, because there is no proxy in front to strip it. The
+# request arrives from CloudFront as /api/health, CloudFront's cache
+# behaviour matched on /api/*, and the ALB listener rule that picks
+# THIS service out of the two behind the load balancer also matches
+# /api/*. Every layer has to agree on the same path, so the app serves
+# it rather than something in between rewriting it.
+#
+# Not FastAPI's own root_path: that only affects generated URLs in the
+# docs, it does NOT strip the prefix before routing. Verified —
+# `uvicorn --root-path /api` still 404s on /api/health.
+# ─────────────────────────────────────────────────────────────────────
+_prefix = os.environ.get("API_PREFIX", "").strip().rstrip("/")
+API_PREFIX = f"/{_prefix.lstrip('/')}" if _prefix else ""
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,10 +95,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(router)
+app.include_router(router, prefix=API_PREFIX)
 
 
-@app.get("/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
     """Liveness plus the four counts worth knowing at a glance.
 
@@ -165,3 +184,12 @@ async def health(request: Request) -> HealthResponse:
         simulator_db=simulator_db,
         os_db=os_db,
     )
+
+
+# Registered rather than decorated so the path can carry API_PREFIX.
+app.add_api_route(
+    f"{API_PREFIX}/health",
+    health,
+    methods=["GET"],
+    response_model=HealthResponse,
+)
