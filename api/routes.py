@@ -27,6 +27,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
 from api.auth import assert_tenant_allowed, require_claims_or_demo, tenant_filter
 
@@ -962,4 +963,281 @@ async def portfolio_summary(
         ],
         "top_denial_reasons": data["top_denial_reasons"],
         "generated_at": data["generated_at"],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Check-in — the front desk's screen, pre-computed.
+#
+# One call for the whole morning instead of three per patient. The
+# front end renders what this returns and reads nothing else, which is
+# what lets that page ship without a signal code on it.
+#
+# ⚠ EVERY MONEY FIGURE COMES FROM resolve_coverage(), the same function
+# GET /patient-summary uses. cost_estimates holds a stored answer that
+# DISAGREES with it — for DA-U01 that table says the patient owes $50
+# and the live computation says $0 — and two screens quoting different
+# numbers for one visit is the worst thing a dental product can do.
+# When that table is reconciled this can read it and save the work.
+# ─────────────────────────────────────────────────────────────────────
+
+# There is no schedule in dental-os. These five are the demo morning; a
+# pre-D not listed here is not "today's patient" and is skipped.
+DEMO_TIMES: dict[str, str] = {
+    "PRED-SIM-DA-A01": "9:00 AM",
+    "PRED-SIM-DA-D04": "9:30 AM",
+    "PRED-SIM-DA-U01": "10:00 AM",
+    "PRED-SIM-DA-U02": "10:30 AM",
+    "PRED-SIM-DA-B04": "11:00 AM",
+}
+
+# NPI -> display name. dental-simulator stores the provider upper-cased
+# ("SRIDHAR CHINTA"); a patient-facing screen wants a name, not a shout.
+PROVIDER_NAMES: dict[str, str] = {"1134534266": "Dr. Sridhar Chinta"}
+
+_PROC_NAMES = {
+    "D6010": "Implant", "D7953": "Bone graft", "D6065": "Crown",
+    "D2740": "Crown", "D2750": "Crown", "D1110": "Cleaning",
+    "D0274": "Bitewings", "D4341": "Scaling", "D2391": "Filling",
+}
+
+_PAYER_NAMES = {
+    "delta_dental": "Delta Dental PPO", "cigna": "Cigna DPPO",
+    "metlife": "MetLife PDP", "aetna": "Aetna DMO",
+    "humana": "Humana DPO", "guardian": "Guardian DPO",
+}
+
+
+def _procedure_summary(codes: list[str]) -> str:
+    parts = [_PROC_NAMES.get(c, c) for c in codes]
+    return " + ".join(dict.fromkeys(parts)) or "\u2014"
+
+
+def _payer_name(payer_id: str | None) -> str:
+    return _PAYER_NAMES.get(payer_id or "", payer_id or "Unknown plan")
+
+
+@router.get("/checkin/today")
+async def checkin_today(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> list[dict]:
+    """Today's patients, pre-computed for the check-in screen."""
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    sim, os_pool = _pools(request)
+
+    rows = await fetch_with_tenant(
+        sim, tenant,
+        """
+        SELECT pr.pred_request_id,
+               p.first_name || ' ' || p.last_name AS patient_name,
+               pr.payer_id, pr.provider_npi,
+               ep.member_id, ep.enrollment_date,
+               ep.annual_maximum, ep.annual_maximum_used,
+               ep.annual_maximum_remaining,
+               ep.deductible_total, ep.deductible_met,
+               ep.pred_required_codes,
+               ps.has_bundling_conflict, ps.decision, ps.criteria_score
+        FROM pred_requests pr
+        JOIN patients p ON p.patient_id = pr.patient_id
+        LEFT JOIN eligibility_profiles ep
+               ON ep.pred_request_id = pr.pred_request_id
+        LEFT JOIN pred_states ps
+               ON ps.pred_request_id = pr.pred_request_id
+        WHERE pr.tenant_id = $1 AND pr.pred_request_id = ANY($2::text[])
+        """,
+        tenant, list(DEMO_TIMES),
+    )
+
+    checked = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT pred_request_id, checked_in_at FROM checkin_events "
+        "WHERE tenant_id = $1 AND checkin_day = CURRENT_DATE",
+        tenant,
+    )
+    checked_at = {r["pred_request_id"]: r["checked_in_at"] for r in checked}
+
+    out: list[dict] = []
+    for row in rows:
+        rid = row["pred_request_id"]
+
+        lines = await fetch_with_tenant(
+            sim, tenant,
+            "SELECT cdt_code FROM procedure_lines WHERE pred_request_id = $1 "
+            "ORDER BY line_no",
+            rid,
+        )
+        codes = [r["cdt_code"] for r in lines]
+
+        # The engine's own money, not a second opinion.
+        try:
+            context = await _build_context(request, rid)
+            coverage = resolve_coverage(context, context.catalogue_rules)
+            csum = coverage["summary"]
+            max_after = _f(csum.get("annual_max_remaining_after"))
+            patient_pays = _f(csum.get("total_patient_pays"))
+            downgraded = [
+                p["cdt_code"] for p in coverage["procedures"]
+                if p.get("downgrade_applied")
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("check-in coverage failed for %s: %s", rid, exc)
+            max_after = patient_pays = None
+            downgraded = []
+
+        alerts: list[dict] = []
+
+        # pred_required_codes, NOT procedure_lines.requires_pred — that
+        # column is true on every line in this corpus, including a
+        # cleaning, and flagging a prophy as needing pre-approval turns
+        # the whole screen into noise.
+        pred_codes = row["pred_required_codes"] or []
+        if isinstance(pred_codes, str):
+            pred_codes = json.loads(pred_codes)
+        if pred_codes:
+            alerts.append({
+                "type": "pre_d_required",
+                "title": "Pre-determination required",
+                "detail": (
+                    f"{_payer_name(row['payer_id'])} requires pre-approval for "
+                    f"{', '.join(pred_codes)}. It must be submitted and "
+                    f"approved before treatment begins."
+                ),
+            })
+
+        if max_after is not None and max_after < 200:
+            used = _f(row["annual_maximum_used"])
+            total = _f(row["annual_maximum"])
+            alerts.append({
+                "type": "annual_max_warning",
+                "title": "Annual maximum nearly exhausted",
+                "detail": (
+                    f"Plan maximum ${total:,.0f} a year, ${used:,.0f} used so "
+                    f"far. About ${max_after:,.0f} left after today's visit."
+                ),
+            })
+
+        if downgraded:
+            alerts.append({
+                "type": "downgrade",
+                "title": "Plan pays at a cheaper material's rate",
+                "detail": (
+                    f"{', '.join(downgraded)} is reimbursed at a lower code's "
+                    f"rate. The patient owes the difference."
+                ),
+            })
+
+        if row["has_bundling_conflict"]:
+            alerts.append({
+                "type": "bundling",
+                "title": "Two procedures are billed together",
+                "detail": (
+                    "Billing is documenting them separately. Do not quote a "
+                    "final figure to the patient yet."
+                ),
+            })
+
+        # deductible_met is an AMOUNT, not a boolean — 50.00 against a
+        # 100.00 total is half met. bool(50.00) would say "met".
+        ded_total = _f(row["deductible_total"])
+        ded_met_amt = _f(row["deductible_met"])
+        ded_met = ded_total > 0 and ded_met_amt >= ded_total
+
+        # enrollment_date comes back as a STRING on this column, not a
+        # date — asyncpg only adapts a real DATE/TIMESTAMP type. Parse
+        # rather than assume, and fall through to None if it is neither.
+        months = None
+        enrolled = row["enrollment_date"]
+        if isinstance(enrolled, str):
+            try:
+                enrolled = date.fromisoformat(enrolled[:10])
+            except ValueError:
+                enrolled = None
+        if isinstance(enrolled, datetime):
+            enrolled = enrolled.date()
+        if isinstance(enrolled, date):
+            months = (date.today() - enrolled).days // 30
+
+        at = checked_at.get(rid)
+        status = "checked_in" if at else ("heads_up" if alerts else "clear")
+
+        out.append({
+            "pred_request_id": rid,
+            "patient_name": row["patient_name"],
+            "appointment_time": DEMO_TIMES[rid],
+            "procedures": codes,
+            "procedure_summary": _procedure_summary(codes),
+            "payer_name": _payer_name(row["payer_id"]),
+            "payer_id": row["payer_id"],
+            # From eligibility_profiles — the payer's own identifier,
+            # which is what the card in the patient's wallet says.
+            # patients.member_id holds a DIFFERENT value for the same
+            # person; the two disagree in this corpus and the payer's
+            # wins at a check-in desk.
+            "member_id": row["member_id"],
+            "enrollment_months": months,
+            "provider_name": PROVIDER_NAMES.get(
+                row["provider_npi"], row["provider_npi"] or "Provider"),
+            "provider_npi": row["provider_npi"],
+            "insurance_active": True,
+            "provider_in_network": True,
+            "deductible_met": ded_met,
+            "deductible_total": ded_total or None,
+            "deductible_remaining": (
+                None if ded_total == 0 else max(ded_total - ded_met_amt, 0.0)
+            ),
+            "annual_max": _f(row["annual_maximum"]) or None,
+            "annual_max_remaining": _f(row["annual_maximum_remaining"]) or None,
+            "annual_max_remaining_after": max_after,
+            "patient_pays_today": patient_pays,
+            "alerts": alerts,
+            "status": status,
+            "checked_in_at": at.isoformat() if at else None,
+        })
+
+    # Sort by status, then by CLOCK time. Sorting the display string
+    # puts "11:00 AM" before "9:00 AM", which is how the 11 o'clock
+    # patient ends up at the top of the morning list.
+    slot = {rid: i for i, rid in enumerate(DEMO_TIMES)}
+    order = {"heads_up": 0, "clear": 1, "checked_in": 2}
+    out.sort(key=lambda x: (order.get(x["status"], 3),
+                            slot.get(x["pred_request_id"], 99)))
+    return out
+
+
+class CheckInRequest(BaseModel):
+    pred_request_id: str
+    patient_name: str
+
+
+@router.post("/checkin")
+async def check_in_patient(
+    body: CheckInRequest,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
+) -> dict:
+    """Record that a patient arrived. Idempotent per patient per day."""
+    # Same boundary as every other route: you may only check in a
+    # patient whose pre-D belongs to your practice.
+    tenant = await _tenant_for(request, body.pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    _, os_pool = _pools(request)
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO checkin_events
+            (pred_request_id, tenant_id, patient_name, checked_in_by)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, pred_request_id, checkin_day) DO UPDATE
+            SET patient_name = EXCLUDED.patient_name
+        RETURNING checked_in_at
+        """,
+        body.pred_request_id, tenant, body.patient_name,
+        claims.get("sub", "demo-user"),
+    )
+    return {
+        "status": "checked_in",
+        "pred_request_id": body.pred_request_id,
+        "patient_name": body.patient_name,
+        "checked_in_at": rows[0]["checked_in_at"].isoformat() if rows else None,
     }
