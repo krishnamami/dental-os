@@ -7,6 +7,11 @@ import { api, keys } from "../../../hooks/useApi";
 import { useDemoLink } from "../../../hooks/useDemo";
 import type { PatientSummary } from "../../../types/dental";
 import { formatCurrency } from "../../../utils/format";
+import {
+  COORDINATOR_ITEMS,
+  generateEmailText,
+  generatePrintHTML,
+} from "./estimateDoc";
 
 /**
  * G-01 — the money conversation, at /coverage.
@@ -58,14 +63,9 @@ interface CheckInPatient {
   checked_in_at: string | null;
 }
 
-const CHECKLIST = [
-  "Treatment plan reviewed with patient",
-  "Insurance coverage explained",
-  "Patient responsibility confirmed",
-  "Financing options offered",
-  "Questions answered",
-  "Consent obtained",
-];
+// One list, shared with the printed document. Two copies would let a
+// coordinator tick six boxes on screen and print six different ones.
+const CHECKLIST = COORDINATOR_ITEMS;
 
 type Bucket = "ready" | "waiting" | "done";
 
@@ -77,12 +77,6 @@ const BUCKET_LABEL: Record<Bucket, string> = {
 
 function firstNameOf(full: string): string {
   return full.replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "").split(/\s+/)[0] ?? "";
-}
-
-function esc(v: string): string {
-  return v.replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c,
-  );
 }
 
 /** Tile in the dark strip — same shape as the check-in screen's. */
@@ -138,142 +132,6 @@ function sharePhrase(ps: PatientSummary): string {
         `${p.cdt_code} ${Math.round((p.insurance_pays / p.contracted_rate) * 100)}%`,
     );
   return parts.join(" · ") || "—";
-}
-
-function estimateHtml(
-  p: CheckInPatient,
-  ps: PatientSummary,
-  practice: string,
-  address: string,
-): string {
-  const rows = ps.procedures
-    .map(
-      (x) => `<tr>
-        <td style="padding:4px 0">${esc(x.cdt_code)} ${esc(x.description ?? "")}</td>
-        <td style="text-align:right">${formatCurrency(x.insurance_pays)}</td>
-        <td style="text-align:right;font-weight:600">${formatCurrency(x.patient_pays)}</td>
-      </tr>`,
-    )
-    .join("");
-  const notes = p.alerts
-    .map((a) => `<li style="margin-bottom:4px">${esc(a.detail)}</li>`)
-    .join("");
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-  <title>Treatment estimate · ${esc(p.patient_name)}</title>
-  <style>
-    body{font-family:system-ui,sans-serif;background:#f9fafb;margin:0;color:#111827}
-    .sheet{max-width:520px;margin:28px auto;background:#fff;border:1px solid #e5e7eb;
-           border-radius:12px;overflow:hidden}
-    .hdr{background:${GREEN};color:#fff;padding:18px 22px}
-    .body{padding:20px 22px}
-    h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 8px;color:#6b7280}
-    table{width:100%;border-collapse:collapse;font-size:12px}
-    .rule{border-top:1px solid #e5e7eb;margin:14px 0}
-    @media print{.no-print{display:none}body{background:#fff}.sheet{border:none;margin:0}}
-  </style></head><body>
-  <div class="sheet">
-    <div class="hdr">
-      <div style="font-size:17px;font-weight:600">${esc(practice)}</div>
-      <div style="font-size:11px;opacity:.8">${esc(address)}</div>
-      <div style="font-size:11px;opacity:.8;margin-top:6px">
-        Treatment cost estimate · ${new Date().toLocaleDateString()}
-      </div>
-    </div>
-    <div class="body">
-      <table>
-        <tr><td style="color:#6b7280;width:90px">Patient</td><td style="font-weight:500">${esc(p.patient_name)}</td></tr>
-        <tr><td style="color:#6b7280">Treatment</td><td style="font-weight:500">${esc(p.procedure_summary)}</td></tr>
-        <tr><td style="color:#6b7280">Provider</td><td style="font-weight:500">${esc(p.provider_name)}</td></tr>
-      </table>
-
-      <h2>Your insurance</h2>
-      <table>
-        <tr><td style="color:#6b7280">Plan</td><td>${esc(p.payer_name)}</td></tr>
-        <tr><td style="color:#6b7280">Member ID</td><td>${esc(p.member_id ?? "—")}</td></tr>
-        <tr><td style="color:#6b7280">Annual max</td><td>${formatCurrency(p.annual_max)} (${formatCurrency(p.annual_max_remaining)} remaining)</td></tr>
-        <tr><td style="color:#6b7280">Deductible</td><td>${
-          p.deductible_met
-            ? "met"
-            : `${formatCurrency(p.deductible_remaining)} still to meet`
-        }</td></tr>
-        <tr><td style="color:#6b7280">Network</td><td>In-network</td></tr>
-      </table>
-
-      <h2>Treatment breakdown</h2>
-      <table>
-        <tr style="color:#6b7280;font-size:11px">
-          <td>Procedure</td><td style="text-align:right">Plan pays</td><td style="text-align:right">You pay</td>
-        </tr>
-        ${rows}
-      </table>
-      <div class="rule"></div>
-      <table>
-        <tr style="font-weight:700">
-          <td>Total</td>
-          <td style="text-align:right">${formatCurrency(ps.summary.total_insurance_pays)}</td>
-          <td style="text-align:right">${formatCurrency(ps.summary.total_patient_pays)}</td>
-        </tr>
-      </table>
-      <div style="margin-top:12px;padding:10px 12px;background:#f0fdf4;border-radius:8px;font-size:12px">
-        Your in-network savings of ${formatCurrency(ps.summary.total_in_network_savings)}
-        are not your responsibility.
-      </div>
-
-      ${
-        notes
-          ? `<h2>Notes</h2><ul style="font-size:12px;color:#374151;padding-left:18px;margin:0">${notes}
-             <li>This is an estimate. Final amounts may vary based on claim adjudication.</li></ul>`
-          : `<h2>Notes</h2><ul style="font-size:12px;color:#374151;padding-left:18px;margin:0">
-             <li>This is an estimate. Final amounts may vary based on claim adjudication.</li></ul>`
-      }
-
-      <div class="rule"></div>
-      <div style="font-size:12px;color:#6b7280">Questions? Ask your treatment coordinator.</div>
-    </div>
-  </div>
-  <div class="no-print" style="text-align:center;margin:16px">
-    <button onclick="window.print()" style="background:${GREEN};color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Print ↓</button>
-  </div></body></html>`;
-}
-
-function emailText(
-  p: CheckInPatient,
-  ps: PatientSummary,
-  practice: string,
-  address: string,
-): string {
-  const lines = ps.procedures
-    .map(
-      (x) =>
-        `  ${x.cdt_code} ${(x.description ?? "").slice(0, 28)}: ${formatCurrency(x.patient_pays)}`,
-    )
-    .join("\n");
-  const note = ps.procedures.find((x) => x.downgrade_applied);
-  return [
-    `Subject: Your treatment estimate — ${practice}`,
-    "",
-    `Hi ${firstNameOf(p.patient_name)},`,
-    "",
-    `Here is your estimated cost for treatment at ${practice}:`,
-    "",
-    lines,
-    "  " + "-".repeat(29),
-    `  Total patient cost: ${formatCurrency(ps.summary.total_patient_pays)}`,
-    "",
-    `Your ${p.payer_name} covers ${formatCurrency(ps.summary.total_insurance_pays)} of the ` +
-      `${formatCurrency(ps.summary.total_contracted)} contracted amount.`,
-    ...(note
-      ? ["", `Note: ${note.cdt_code} is paid at a lower material rate under your plan.`]
-      : []),
-    "",
-    "This is an estimate. Final amounts may vary based on claim adjudication.",
-    "",
-    "Questions? Call us or ask at your visit.",
-    "",
-    practice,
-    address,
-  ].join("\n");
 }
 
 function StatCard({
@@ -585,9 +443,11 @@ function PatientCard({
             <button
               type="button"
               onClick={() => {
-                const w = window.open("", "_blank", "width=620,height=780");
+                const w = window.open("", "_blank", "width=900,height=1100");
                 if (!w) return onToast("Allow pop-ups to print");
-                w.document.write(estimateHtml(p, ps, practice, address));
+                w.document.write(
+                  generatePrintHTML(p, ps, checked, practice, address),
+                );
                 w.document.close();
               }}
               className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
@@ -597,10 +457,10 @@ function PatientCard({
             <button
               type="button"
               onClick={() => {
-                const text = emailText(p, ps, practice, address);
+                const text = generateEmailText(p, ps, checked, practice, address);
                 navigator.clipboard
                   ?.writeText(text)
-                  .then(() => onToast("Email text copied ✓"))
+                  .then(() => onToast("Email content copied ✓"))
                   .catch(() => onToast("Could not copy — check clipboard permission"));
               }}
               className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
