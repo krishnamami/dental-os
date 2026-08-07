@@ -327,7 +327,7 @@ function DecisionTab({
   const byWave = useMemo(() => {
     const map = new Map<number, Signal[]>();
     for (const w of WAVES) map.set(w.wave, []);
-    for (const s of decision.all_signals) {
+    for (const s of decision?.all_signals ?? []) {
       map.get(s.wave)?.push(s);
     }
     return map;
@@ -420,7 +420,7 @@ function auditTime(processedAt: string | undefined, wave: number, i: number) {
 function AuditTab({ decision }: { decision: Decision }) {
   const events = useMemo(
     () =>
-      [...decision.all_signals]
+      [...(decision?.all_signals ?? [])]
         .sort((a, b) => a.wave - b.wave || a.signal_code.localeCompare(b.signal_code))
         .map((s, i) => ({ signal: s, when: auditTime(decision.processed_at, s.wave, i) })),
     [decision],
@@ -568,8 +568,17 @@ export default function WorkbenchPipeline({
   const patient = decision?.patient_name ?? row.patient;
   const payer = decision?.plan_name ?? row.payer;
   const status = decision?.decision ?? row.status;
-  const openCount = decision?.open_conditions.length ?? row.open;
+  // `decision?.open_conditions.length` was the crash: the optional chain
+  // guards `decision`, then a bare dot reaches straight into a field TS
+  // types as always-present. When the SPA fallback hands back HTML
+  // dressed as a Decision, that dot throws on mount.
+  const openCount = (decision?.open_conditions ?? []).length || row.open;
   const blocking = conditions?.blocking_count ?? row.blocking;
+
+  // Nothing to guard against on the left — the queue is static — but the
+  // right panel has no content until the first fetch settles, and a
+  // half-drawn header reads as a bug.
+  const showSkeleton = !decision && isLoading;
 
   function select(id: string) {
     setSelectedId(id);
@@ -732,7 +741,7 @@ export default function WorkbenchPipeline({
 
         {/* Tab body */}
         <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-          {isLoading && (
+          {showSkeleton && (
             <div className="animate-pulse space-y-3">
               <div className="h-16 rounded-lg bg-gray-100" />
               <div className="h-24 rounded-lg bg-gray-100" />

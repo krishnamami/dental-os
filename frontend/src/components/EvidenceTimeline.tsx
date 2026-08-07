@@ -81,7 +81,7 @@ export function buildTimeline(
   documents: EvidenceItem[] = [],
 ): TimelineNode[] {
   const by = (code: string) =>
-    decision.all_signals.find((s) => s.signal_code === code);
+    (decision.all_signals ?? []).find((s) => s.signal_code === code);
 
   const nodes: TimelineNode[] = [];
 
@@ -186,8 +186,8 @@ export function buildTimeline(
   }
 
   // ── 6. Final clinical assessment ─────────────────────────────────
-  const open = decision.open_conditions.length;
-  const blocking = decision.all_signals.filter(
+  const open = (decision.open_conditions ?? []).length;
+  const blocking = (decision.all_signals ?? []).filter(
     (s) => s.mode === "human_approval",
   ).length;
   nodes.push({

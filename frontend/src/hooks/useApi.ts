@@ -46,10 +46,41 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Reject a 200 that is not JSON.
+ *
+ * ⚠ THIS IS THE IMPORTANT ONE. In production `/api/*` is not routed
+ * anywhere: it misses in S3, CloudFront's SPA fallback catches the 404
+ * and serves **index.html with status 200**. axios sees a success, and
+ * every hook resolves with a string of HTML where a Decision should be.
+ *
+ * The damage is not a network error — it is worse. `isError` stays
+ * false, `data` is truthy, and the first `data.something.length` in any
+ * component throws "Cannot read properties of undefined". Every page's
+ * carefully written error branch is skipped, because as far as React
+ * Query is concerned the request succeeded.
+ *
+ * Turning it back into an ApiError means the SPA fallback can no longer
+ * impersonate the API, and the error states that already exist do their
+ * job.
+ */
+function assertJson<T>(path: string, data: unknown, contentType: unknown): T {
+  const type = typeof contentType === "string" ? contentType : "";
+  if (typeof data === "string" || (type && !type.includes("json"))) {
+    throw new ApiError(
+      `GET ${path} returned ${type || "a non-JSON body"} instead of JSON. ` +
+        "The API is not reachable from this origin — in production /api " +
+        "is not routed to dental-os, so the SPA fallback answers instead.",
+      502,
+    );
+  }
+  return data as T;
+}
+
 async function get<T>(path: string): Promise<T> {
   try {
-    const { data } = await api.get<T>(path);
-    return data;
+    const res = await api.get<T>(path);
+    return assertJson<T>(path, res.data, res.headers?.["content-type"]);
   } catch (err) {
     if (axios.isAxiosError(err)) {
       const detail = (err.response?.data as { detail?: string } | undefined)

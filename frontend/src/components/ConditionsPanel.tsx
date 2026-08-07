@@ -144,15 +144,15 @@ export default function ConditionsPanel({
         </p>
       )}
 
-      {data && data.conditions.length === 0 && (
+      {data && (data.conditions ?? []).length === 0 && (
         <p className="px-4 py-6 text-[13px] text-accord-green-700">
           No open conditions — this pre-D is clear to submit.
         </p>
       )}
 
-      {data && data.conditions.length > 0 && (
+      {data && (data.conditions ?? []).length > 0 && (
         <ul>
-          {data.conditions.map((c) => (
+          {(data.conditions ?? []).map((c) => (
             <ConditionRow
               key={c.signal_code}
               predRequestId={predRequestId}
