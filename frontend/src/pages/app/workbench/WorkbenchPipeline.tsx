@@ -1,22 +1,8 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Check, Diamond, X } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft } from "lucide-react";
 
-import ConditionsPanel from "../../../components/ConditionsPanel";
-import DecisionBadge from "../../../components/DecisionBadge";
-import DetailTopbar from "../../../components/DetailTopbar";
-import EvidenceTimeline, {
-  buildTimeline,
-  type TimelineNode,
-} from "../../../components/EvidenceTimeline";
-import EvidenceDetailPanel from "../../../components/EvidenceDetailPanel";
-import ReadinessBadge from "../../../components/ReadinessBadge";
-import RequestDocsModal from "../../../components/RequestDocsModal";
-import { toneFor, type SignalTone } from "../../../components/SignalCard";
-import { useAppeal, useConditions, useDecision } from "../../../hooks/useApi";
-import { useDemoLink } from "../../../hooks/useDemo";
-import type { Decision, Signal } from "../../../types/dental";
-import { formatCurrencyShort, scenarioId } from "../../../utils/format";
+import PreDDetail from "../../../components/PreDDetail";
+import { formatCurrencyShort } from "../../../utils/format";
 
 /**
  * D-10 — the workbench as a split panel.
@@ -139,84 +125,12 @@ const QUEUE: QueueRow[] = [
   },
 ];
 
-/**
- * The five waves, labelled from WAVE_CONFIG in dental-os
- * core/cron/runner.py — NOT from what the wave numbers sound like.
- *
- * The mapping is easy to get wrong, and getting it wrong puts
- * documentation findings under a "Clinical" heading in a clinical
- * product. The engine's actual order is:
- *
- *   1  eligibility_analyst · provider_credentialing · fraud_integrity
- *   2  coverage_analyst · clinical_reviewer
- *   3  documentation_reviewer
- *   4  pre_d_assessment
- *   5  appeal_specialist · dso_portfolio_manager
- *
- * Note wave 2 carries the CLINICAL reviewer and wave 3 is documents —
- * not the other way round.
- */
-const WAVES: Array<{ wave: number; label: string; tip: string }> = [
-  { wave: 1, label: "VERIFY", tip: "Eligibility, provider credentialing, fraud" },
-  { wave: 2, label: "COVERAGE", tip: "Payer rules, fee schedules, clinical criteria" },
-  { wave: 3, label: "DOCUMENTS", tip: "Completeness and narrative" },
-  { wave: 4, label: "DECISION", tip: "Final pre-D assessment" },
-  { wave: 5, label: "APPEAL", tip: "Appeal viability and portfolio impact" },
-];
-
-type WaveState = "passed" | "review" | "blocked" | "pending";
-
-/**
- * A wave's state is the worst state of its signals.
- *
- * There is no `auto_execute` in this domain — the API only ever sends
- * `recommend` or `human_approval` — so "passed" means every signal came
- * back green under the SAME rule the rest of the app uses (toneFor),
- * not that a mode string matched. One source for tone is the point:
- * a wave cannot read green here and amber three inches lower.
- */
-function waveState(signals: Signal[]): WaveState {
-  if (signals.length === 0) return "pending";
-  const tones = new Set<SignalTone>(signals.map(toneFor));
-  if (tones.has("red")) return "blocked";
-  if (tones.has("amber")) return "review";
-  return "passed";
-}
-
-const WAVE_STYLE: Record<WaveState, { box: string; text: string }> = {
-  passed: {
-    box: "border-accord-green-500 bg-accord-green-50",
-    text: "text-accord-green-700",
-  },
-  review: { box: "border-amber-300 bg-accord-amber-50", text: "text-accord-amber-900" },
-  blocked: { box: "border-red-300 bg-red-50", text: "text-red-700" },
-  pending: { box: "border-gray-200 bg-gray-50", text: "text-gray-400" },
-};
-
-function WaveIcon({ state }: { state: WaveState }) {
-  if (state === "passed") return <Check size={14} strokeWidth={3} />;
-  if (state === "review") return <Diamond size={12} fill="currentColor" />;
-  if (state === "blocked") return <X size={14} strokeWidth={3} />;
-  return <span className="text-[15px] leading-none">·</span>;
-}
-
-const TONE_TEXT: Record<SignalTone, string> = {
-  green: "text-accord-green-700",
-  amber: "text-accord-amber-900",
-  red: "text-red-700",
-};
-
-function SignalIcon({ tone }: { tone: SignalTone }) {
-  if (tone === "green") return <Check size={13} strokeWidth={3} />;
-  if (tone === "red") return <X size={13} strokeWidth={3} />;
-  return <Diamond size={11} fill="currentColor" />;
-}
-
 const DOT: Record<Status, string> = {
   approved: "bg-accord-green-500",
   pended: "bg-amber-400",
   denied: "bg-red-500",
 };
+
 
 // ── Left panel ───────────────────────────────────────────────────────
 
@@ -286,310 +200,19 @@ function CountCell({
   );
 }
 
-// ── Decision tab ─────────────────────────────────────────────────────
-
-function SignalRow({ signal }: { signal: Signal }) {
-  const tone = toneFor(signal);
-  const citation = signal.payer_citation ?? signal.citation;
-  return (
-    <li className="flex gap-2.5 border-b border-gray-100 py-3 last:border-b-0">
-      <span className={`mt-0.5 flex-shrink-0 ${TONE_TEXT[tone]}`}>
-        <SignalIcon tone={tone} />
-      </span>
-      <div className="min-w-0">
-        <p className="font-mono text-[11px] font-semibold text-gray-500">
-          {signal.signal_code}
-        </p>
-        <p className="mt-0.5 text-[13px] leading-relaxed text-gray-800">
-          {signal.finding}
-        </p>
-        {citation && (
-          <p className="mt-1.5 text-[11.5px] italic text-accord-green-700">
-            {citation}
-          </p>
-        )}
-        {signal.recommended_action && (
-          <p className="mt-1 text-[11.5px] text-gray-500">
-            Recommended: {signal.recommended_action.replace(/_/g, " ")}
-          </p>
-        )}
-      </div>
-    </li>
-  );
-}
-
-function DecisionTab({
-  decision,
-  activeWave,
-  onWave,
-}: {
-  decision: Decision;
-  activeWave: number | null;
-  onWave: (wave: number | null) => void;
-}) {
-  const byWave = useMemo(() => {
-    const map = new Map<number, Signal[]>();
-    for (const w of WAVES) map.set(w.wave, []);
-    for (const s of decision?.all_signals ?? []) {
-      map.get(s.wave)?.push(s);
-    }
-    return map;
-  }, [decision]);
-
-  const shown = activeWave ? WAVES.filter((w) => w.wave === activeWave) : WAVES;
-
-  return (
-    <div>
-      <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
-        {WAVES.map((w) => {
-          const signals = byWave.get(w.wave) ?? [];
-          const state = waveState(signals);
-          const style = WAVE_STYLE[state];
-          const active = activeWave === w.wave;
-          return (
-            <button
-              key={w.wave}
-              type="button"
-              title={w.tip}
-              onClick={() => onWave(active ? null : w.wave)}
-              className={`rounded-lg border p-2 text-center transition ${style.box} ${
-                active ? "ring-2 ring-accord-green-500 ring-offset-1" : ""
-              }`}
-            >
-              <span
-                className={`mx-auto flex h-5 w-5 items-center justify-center ${style.text}`}
-              >
-                <WaveIcon state={state} />
-              </span>
-              <span className="mt-1 block text-[9.5px] font-bold tracking-wide text-gray-700 sm:text-[10.5px]">
-                {w.label}
-              </span>
-              <span className="mt-0.5 block text-[10px] text-gray-400">
-                {signals.length}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      <p className="mt-2 text-[11.5px] text-gray-400">
-        {activeWave
-          ? `Wave ${activeWave} — ${WAVES.find((w) => w.wave === activeWave)?.tip}. Click again for all waves.`
-          : "Click a wave to filter. All five shown."}
-      </p>
-
-      {shown.map((w) => {
-        const signals = byWave.get(w.wave) ?? [];
-        if (signals.length === 0) return null;
-        return (
-          <section key={w.wave} className="mt-5">
-            <h3 className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-400">
-              Wave {w.wave} · {w.label}
-            </h3>
-            <ul className="mt-1">
-              {signals.map((s) => (
-                <SignalRow key={`${s.decision_id}-${s.signal_code}`} signal={s} />
-              ))}
-            </ul>
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Audit tab ────────────────────────────────────────────────────────
-
-/**
- * The audit trail, built from the signals the engine actually emitted.
- *
- * ⚠ THE TIMESTAMPS ARE SIMULATED. The API returns one `processed_at`
- * for the whole bundle, not a per-signal time, so the clock below is
- * derived from the wave number — it shows the ORDER the engine ran in,
- * which is real, at times that are not. The header says so; do not
- * quietly drop that caveat, because "immutable audit trail" plus made
- * up times is the one combination a payer dispute cannot survive.
- */
-function auditTime(processedAt: string | undefined, wave: number, i: number) {
-  const base = processedAt ? new Date(processedAt) : null;
-  if (!base || Number.isNaN(base.getTime())) return "—";
-  const t = new Date(base.getTime() + (wave - 1) * 60_000 + i * 12_000);
-  return `${t.getMonth() + 1}/${t.getDate()} · ${t.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
-}
-
-function AuditTab({ decision }: { decision: Decision }) {
-  const events = useMemo(
-    () =>
-      [...(decision?.all_signals ?? [])]
-        .sort((a, b) => a.wave - b.wave || a.signal_code.localeCompare(b.signal_code))
-        .map((s, i) => ({ signal: s, when: auditTime(decision.processed_at, s.wave, i) })),
-    [decision],
-  );
-
-  return (
-    <div>
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500">
-          Audit trail — append only
-        </h3>
-        <p className="text-[11px] text-gray-400">
-          Order is the engine's. Times are derived from the run timestamp,
-          not recorded per signal.
-        </p>
-      </div>
-
-      <ol className="mt-4">
-        {events.map(({ signal, when }, i) => {
-          const tone = toneFor(signal);
-          return (
-            <li key={`${signal.decision_id}-${signal.signal_code}`} className="flex gap-3">
-              {/* Rail: dot plus the connector to the next event. */}
-              <div className="flex flex-col items-center">
-                <span
-                  className={`mt-1.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border bg-white ${
-                    tone === "green"
-                      ? "border-accord-green-500 text-accord-green-700"
-                      : tone === "red"
-                        ? "border-red-300 text-red-700"
-                        : "border-amber-300 text-accord-amber-900"
-                  }`}
-                >
-                  <SignalIcon tone={tone} />
-                </span>
-                {i < events.length - 1 && (
-                  <span className="w-px flex-1 bg-gray-200" aria-hidden="true" />
-                )}
-              </div>
-
-              <div className="min-w-0 flex-1 pb-4">
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="font-mono text-[11px] text-gray-400">{when}</span>
-                  <span className="font-mono text-[11px] font-semibold text-gray-500">
-                    {signal.signal_code}
-                  </span>
-                </div>
-                <p
-                  className={`mt-0.5 text-[13px] leading-relaxed ${
-                    tone === "green" ? "text-gray-600" : "font-medium text-gray-900"
-                  }`}
-                >
-                  {signal.finding}
-                </p>
-                <p className="mt-1 text-[11px] text-gray-400">
-                  Wave {signal.wave} · mode: {signal.mode} ·{" "}
-                  {signal.decision_id.replace(/_/g, " ")}
-                </p>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </div>
-  );
-}
-
-// ── Evidence tab ─────────────────────────────────────────────────────
-
-function EvidenceTab({ decision }: { decision: Decision }) {
-  const demoLink = useDemoLink();
-  const { data: appeal } = useAppeal(decision.pred_request_id);
-  const nodes = useMemo(
-    () => buildTimeline(decision, appeal?.evidence_list ?? []),
-    [decision, appeal],
-  );
-  const [nodeId, setNodeId] = useState<string | null>(null);
-  const selected: TimelineNode | null =
-    nodes.find((n) => n.id === nodeId) ??
-    nodes.find((n) => n.id === "ada") ??
-    nodes[0] ??
-    null;
-
-  if (nodes.length === 0) {
-    return (
-      <p className="text-[13px] text-gray-500">
-        No evidence chain for this pre-D — the clinical signals it would be
-        built from are not present.
-      </p>
-    );
-  }
-
-  return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      <EvidenceTimeline
-        nodes={nodes}
-        selectedId={selected?.id}
-        onSelect={(n) => setNodeId(n.id)}
-      />
-      <EvidenceDetailPanel
-        node={selected}
-        documents={appeal?.evidence_list ?? []}
-        demoLink={demoLink}
-      />
-    </div>
-  );
-}
-
-// ── Page ─────────────────────────────────────────────────────────────
-
-const TABS = [
-  { key: "decision", label: "Decision" },
-  { key: "evidence", label: "Evidence" },
-  { key: "conditions", label: "Conditions" },
-  { key: "audit", label: "Audit" },
-] as const;
-
-type Tab = (typeof TABS)[number]["key"];
-
-export default function WorkbenchPipeline({
-  /** Test seam only — lets a render harness open a tab directly. */
-  initialTab = "decision",
-}: {
-  initialTab?: Tab;
-} = {}) {
+export default function WorkbenchPipeline() {
   const [selectedId, setSelectedId] = useState(QUEUE[0].id);
-  const [tab, setTab] = useState<Tab>(initialTab);
-  const [activeWave, setActiveWave] = useState<number | null>(null);
   // Below md the two panels share the screen one at a time.
   const [showDetail, setShowDetail] = useState(false);
-  const [docsOpen, setDocsOpen] = useState(false);
-  const [toast, setToast] = useState("");
-  const navigate = useNavigate();
-  const demoLink = useDemoLink();
 
-  const { data: decision, isLoading, isError, error } = useDecision(selectedId);
-  const { data: conditions } = useConditions(selectedId);
-  const { data: appeal } = useAppeal(selectedId);
-
-  const row = QUEUE.find((r) => r.id === selectedId) ?? QUEUE[0];
-
+  // No queries here any more. PreDDetail owns every request the right
+  // half makes; this component's only job is which pre-D is selected.
   const action = QUEUE.filter((r) => r.status !== "approved");
   const ready = QUEUE.filter((r) => r.status === "approved");
   const pended = QUEUE.filter((r) => r.status === "pended");
 
-  // Live where the API answers, snapshot where it does not. Never a
-  // blend that cannot be told apart.
-  const live = Boolean(decision);
-  const patient = decision?.patient_name ?? row.patient;
-  const payer = decision?.plan_name ?? row.payer;
-  const status = decision?.decision ?? row.status;
-  // `decision?.open_conditions.length` was the crash: the optional chain
-  // guards `decision`, then a bare dot reaches straight into a field TS
-  // types as always-present. When the SPA fallback hands back HTML
-  // dressed as a Decision, that dot throws on mount.
-  const openCount = (decision?.open_conditions ?? []).length || row.open;
-  const blocking = conditions?.blocking_count ?? row.blocking;
-
-  // Nothing to guard against on the left — the queue is static — but the
-  // right panel has no content until the first fetch settles, and a
-  // half-drawn header reads as a bug.
-  const showSkeleton = !decision && isLoading;
-
   function select(id: string) {
     setSelectedId(id);
-    setActiveWave(null);
     setShowDetail(true);
   }
 
@@ -658,231 +281,29 @@ export default function WorkbenchPipeline({
       </aside>
 
       {/* ── Right: the selected pre-D ────────────────────────── */}
+      {/* The whole detail view is PreDDetail — the same component
+          /workbench/:id renders. Two copies of a 500-line chart view
+          is how the same case ends up described two ways. */}
       <section
-        className={`min-w-0 flex-1 flex-col md:flex ${
+        className={`min-w-0 flex-1 flex-col overflow-y-auto md:flex ${
           showDetail ? "flex" : "hidden"
         }`}
       >
-        {/* The actions live here, not in the footer. Two Submit
-            buttons on one screen — one greyed by the readiness rule and
-            one not — is worse than none. */}
-        <DetailTopbar
-          root="Pre-D workbench"
-          current={patient}
-          actions={[
-            {
-              label: "Add note",
-              title: "Demo only — there is no note endpoint yet",
-              disabled: true,
-            },
-            { label: "Request docs", onClick: () => setDocsOpen(true) },
-            {
-              label: "Generate appeal",
-              onClick: () => navigate(demoLink(`/revenue-ops/appeals`)),
-              title: appeal?.viable
-                ? "Open the appeal packet in Revenue ops"
-                : "No viable appeal on this pre-D",
-              disabled: !appeal?.viable,
-            },
-            {
-              label: "View evidence",
-              onClick: () =>
-                navigate(demoLink(`/evidence/${selectedId}`)),
-            },
-          ]}
-          primary={{
-            label: "Submit pre-D",
-            title: decision?.submission_ready
-              ? "Demo only — submission runs in the product"
-              : "Blocked until every condition is cleared",
-            disabled: !decision?.submission_ready,
-          }}
-        />
-
-        <header className="border-b border-gray-200 bg-white px-4 py-3 sm:px-5">
-          <button
-            type="button"
-            onClick={() => setShowDetail(false)}
-            className="mb-2 inline-flex min-h-[36px] items-center gap-1.5 text-[12.5px] font-medium text-gray-500 hover:text-gray-900 md:hidden"
-          >
-            <ArrowLeft size={14} />
-            Queue
-          </button>
-
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[19px] font-semibold text-gray-900 sm:text-xl">
-                  {patient}
-                </h2>
-                <DecisionBadge decision={status} />
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase ${
-                    live
-                      ? "bg-accord-green-50 text-accord-green-700"
-                      : "bg-gray-100 text-gray-500"
-                  }`}
-                >
-                  {live ? "live" : "snapshot"}
-                </span>
-              </div>
-              <p className="mt-0.5 text-[12.5px] text-gray-500">
-                {formatCurrencyShort(row.charges)} · {payer} ·{" "}
-                {scenarioId(selectedId)}
-              </p>
-            </div>
-
-            <dl className="flex flex-shrink-0 gap-5">
-              <div>
-                <dt className="text-[10px] uppercase tracking-wide text-gray-500">
-                  Criteria
-                </dt>
-                <dd className="mt-0.5 text-[17px] font-semibold leading-none text-gray-900">
-                  {decision?.criteria_score ?? "—"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-[10px] uppercase tracking-wide text-gray-500">
-                  Readiness
-                </dt>
-                <dd className="mt-0.5">
-                  <ReadinessBadge
-                    score={decision?.readiness_met ?? 0}
-                    total={decision?.readiness_total ?? 14}
-                  />
-                </dd>
-              </div>
-            </dl>
-          </div>
-        </header>
-
-        {/* Tabs */}
-        <nav className="flex gap-4 border-b border-gray-200 bg-white px-4 sm:px-5">
-          {TABS.map((t) => {
-            const on = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`-mb-px min-h-[40px] border-b-2 text-[13px] font-medium transition ${
-                  on
-                    ? "border-accord-green-900 text-accord-green-900"
-                    : "border-transparent text-gray-500 hover:text-gray-900"
-                }`}
-              >
-                {t.label}
-                {t.key === "conditions" && openCount > 0 && (
-                  <span className="ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
-                    {openCount}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Tab body */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-          {showSkeleton && (
-            <div className="animate-pulse space-y-3">
-              <div className="h-16 rounded-lg bg-gray-100" />
-              <div className="h-24 rounded-lg bg-gray-100" />
-              <div className="h-24 rounded-lg bg-gray-100" />
-            </div>
-          )}
-
-          {isError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-5">
-              <p className="text-[13.5px] font-medium text-red-700">
-                Could not load {scenarioId(selectedId)}.
-              </p>
-              <p className="mt-1 text-[12.5px] text-red-600">
-                {error instanceof Error ? error.message : "Unknown error"}
-              </p>
-              <p className="mt-2 text-[12px] text-red-500">
-                The dental-os API should be running on :9010. The queue on the
-                left is a snapshot and stays readable without it.
-              </p>
-            </div>
-          )}
-
-          {decision && tab === "decision" && (
-            <DecisionTab
-              decision={decision}
-              activeWave={activeWave}
-              onWave={setActiveWave}
-            />
-          )}
-          {decision && tab === "evidence" && (
-            <EvidenceTab key={decision.pred_request_id} decision={decision} />
-          )}
-          {decision && tab === "conditions" && (
-            <ConditionsPanel predRequestId={decision.pred_request_id} />
-          )}
-          {decision && tab === "audit" && <AuditTab decision={decision} />}
-        </div>
-
-        {/* ── Action bar ─────────────────────────────────────── */}
-        <footer className="border-t border-gray-200 bg-white px-4 py-2.5 sm:px-5">
-          <p className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-gray-500">
-            <span
-              aria-hidden="true"
-              className={`h-2 w-2 rounded-full ${
-                decision?.submission_ready ? "bg-accord-green-500" : "bg-amber-400"
-              }`}
-            />
-            {decision?.submission_ready
-              ? "Ready to submit"
-              : `${blocking} of ${openCount} conditions need a signature`}
-            <span className="text-gray-300">·</span>
-            {decision?.readiness_met ?? "—"}/{decision?.readiness_total ?? 14} flags
-            <span className="text-gray-300">·</span>
-            {decision?.criteria_score ?? "—"} criteria
-            {decision?.confidence_label && (
-              <>
-                <span className="text-gray-300">·</span>
-                {decision.confidence_label}
-              </>
-            )}
-          </p>
-
-          <div className="flex flex-wrap gap-2">
-            {/* Submit, Add note, Generate appeal and View evidence are
-                in the topbar. Override stays here: it is the one action
-                that contradicts the engine, and it belongs next to the
-                readiness line that explains why. */}
+        <PreDDetail
+          predRequestId={selectedId}
+          beforeTopbar={
             <button
               type="button"
-              title="Demo only — an override is recorded as feedback in the product"
-              className="min-h-[36px] rounded-lg border border-red-200 px-3.5 text-[12.5px] font-medium text-red-600 transition hover:bg-red-50"
+              onClick={() => setShowDetail(false)}
+              className="inline-flex min-h-[36px] items-center gap-1.5 border-b border-gray-200 px-4 text-[12.5px] font-medium text-gray-500 hover:text-gray-900 md:hidden"
             >
-              Override
+              <ArrowLeft size={14} />
+              Queue
             </button>
-          </div>
-        </footer>
+          }
+        />
       </section>
 
-      {docsOpen && (
-        <RequestDocsModal
-          patientName={patient}
-          onClose={() => setDocsOpen(false)}
-          onSend={() => {
-            setDocsOpen(false);
-            setToast(`Document request queued for ${patient} ✓`);
-            window.setTimeout(() => setToast(""), 3000);
-          }}
-        />
-      )}
-
-      {toast && (
-        <div
-          role="status"
-          className="fixed bottom-[76px] left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-[12.5px] font-medium text-white shadow-lg lg:bottom-6"
-        >
-          {toast}
-        </div>
-      )}
     </div>
   );
 }

@@ -5,11 +5,24 @@ import { Sparkles } from "lucide-react";
 import CostTable from "../../../components/CostTable";
 import DetailTopbar from "../../../components/DetailTopbar";
 import RequestDocsModal from "../../../components/RequestDocsModal";
-import { toneFor, type SignalTone } from "../../../components/SignalCard";
 import { useAppeal, useDecision, usePatientSummary } from "../../../hooks/useApi";
 import { useDemo, useDemoLink } from "../../../hooks/useDemo";
-import type { Decision, PatientSummary, Signal } from "../../../types/dental";
+
 import { formatCurrency } from "../../../utils/format";
+import {
+  analysis,
+  ASSIGNEE_LABEL,
+  blockingCount,
+  citationsOf,
+  failingFlag,
+  humanCode,
+  openConditions,
+  recommendedAction,
+  signalsByWave,
+  WAVE_CLS,
+  WAVES,
+  waveState,
+} from "../../../utils/predDerive";
 
 /**
  * E-01b — one pre-D, from the front desk's side of it.
@@ -33,146 +46,6 @@ import { formatCurrency } from "../../../utils/format";
  */
 
 const GREEN = "#0F4D37";
-
-const WAVES: Array<{ n: number; label: string }> = [
-  { n: 1, label: "Verify" },
-  { n: 2, label: "Coverage" },
-  { n: 3, label: "Documents" },
-  { n: 4, label: "Decision" },
-  { n: 5, label: "Appeal" },
-];
-
-type WaveState = "Passed" | "Review" | "Blocked" | "Pending";
-
-const WAVE_CLS: Record<WaveState, string> = {
-  Passed: "border-green-200 bg-green-50 text-green-800",
-  Review: "border-amber-200 bg-amber-50 text-amber-800",
-  Blocked: "border-red-200 bg-red-50 text-red-800",
-  Pending: "border-gray-200 bg-gray-50 text-gray-400",
-};
-
-function waveState(signals: Signal[]): WaveState {
-  if (signals.length === 0) return "Pending";
-  const tones = new Set<SignalTone>(signals.map(toneFor));
-  if (tones.has("red")) return "Blocked";
-  if (tones.has("amber")) return "Review";
-  return "Passed";
-}
-
-/** Signals that want a human: a signature, or a named next step. */
-function openConditions(d: Decision): Signal[] {
-  return d.all_signals.filter(
-    (s) => s.mode === "human_approval" || Boolean(s.recommended_action),
-  );
-}
-
-function humanCode(code: string): string {
-  return code.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
-}
-
-function num(v: unknown): number | undefined {
-  return typeof v === "number" ? v : undefined;
-}
-
-/** The headline next step, chosen by what is actually blocking. */
-function recommendedAction(d: Decision): { action: string; why: string } {
-  const has = (c: string) => d.all_signals.some((s) => s.signal_code === c);
-  if (has("DOC_NARRATIVE_MISSING") || has("CLINICAL_NARRATIVE_MISSING")) {
-    return {
-      action: "Add narrative",
-      why: "Upload an independent bone-graft note to unblock D7953 and enable submission",
-    };
-  }
-  if (has("COVERAGE_BUNDLING_CONFLICT")) {
-    return {
-      action: "Resolve bundling",
-      why: "Document the two procedures separately under the payer's own criteria",
-    };
-  }
-  if (has("DOC_XRAY_MISSING")) {
-    return { action: "Upload X-ray", why: "The clinical check cannot run without it" };
-  }
-  if (d.submission_ready) {
-    return { action: "Ready to submit", why: "Every readiness flag is satisfied" };
-  }
-  return {
-    action: "Review open conditions",
-    why: "Submission is blocked until each one is cleared",
-  };
-}
-
-/**
- * The analysis paragraph, assembled from signal `data` — never written
- * as prose and never inferred. Each clause appears only if the signal
- * that carries its numbers is present, so this cannot describe a case
- * the engine did not report.
- */
-function analysis(d: Decision, ps?: PatientSummary): string[] {
-  const by = (c: string) => d.all_signals.find((s) => s.signal_code === c);
-  const out: string[] = [];
-
-  const elig = by("ELIGIBILITY_VERIFIED");
-  if (elig) {
-    const max = num(elig.data.annual_max_remaining);
-    out.push(
-      `${d.patient_name} is eligible${
-        max !== undefined ? `, with ${formatCurrency(max)} of the annual maximum remaining` : ""
-      }.`,
-    );
-  }
-
-  const crit = by("CLINICAL_CRITERIA_MET");
-  if (crit) {
-    const bl = num(crit.data.bone_loss_mm);
-    const th = num(crit.data.threshold);
-    if (bl !== undefined && th !== undefined) {
-      out.push(`Bone loss of ${bl}mm clears the ${th}mm threshold for the implant.`);
-    }
-  }
-
-  const bundle = by("COVERAGE_BUNDLING_CONFLICT");
-  if (bundle) {
-    const primary = bundle.data.primary;
-    const bundled = bundle.data.bundled;
-    const section = bundle.data.policy_section;
-    out.push(
-      `Submission is held by a bundling conflict between ${primary} and ${bundled}` +
-        (section ? ` under ${d.plan_name} ${section}` : "") +
-        `. It is separable with documentation.`,
-    );
-  }
-
-  const down = by("COVERAGE_DOWNGRADE_APPLIED");
-  if (down) {
-    const billed = down.data.billed_code;
-    const paid = down.data.paid_code;
-    const pays = num(down.data.patient_pays);
-    out.push(
-      `${billed} is reimbursed at the ${paid} rate` +
-        (pays !== undefined ? `, leaving ${formatCurrency(pays)} to the patient` : "") +
-        `.`,
-    );
-  }
-
-  if (ps) {
-    out.push(
-      `Total ${formatCurrency(ps.summary.total_provider_charges)} charged, ` +
-        `${formatCurrency(ps.summary.total_patient_pays)} to the patient after ` +
-        `${formatCurrency(ps.summary.total_in_network_savings)} of in-network discount.`,
-    );
-  }
-
-  if (out.length === 0) out.push("No findings on this pre-D.");
-  return out;
-}
-
-const ASSIGNEE_LABEL: Record<string, string> = {
-  front_desk: "Front desk",
-  billing: "Billing",
-  dentist: "Dentist",
-  provider: "Provider",
-  dso_manager: "DSO manager",
-};
 
 function StatCard({
   label,
@@ -228,26 +101,15 @@ export default function CoverageDetail() {
   const d = decisionQ.data;
   const ps = summaryQ.data;
 
-  const byWave = useMemo(() => {
-    const map = new Map<number, Signal[]>();
-    for (const w of WAVES) map.set(w.n, []);
-    for (const s of d?.all_signals ?? []) map.get(s.wave)?.push(s);
-    return map;
-  }, [d]);
+  const byWave = useMemo(() => signalsByWave(d), [d]);
 
-  const conditions = d ? openConditions(d) : [];
-  const blocking = conditions.filter((s) => s.mode === "human_approval").length;
+  const conditions = openConditions(d);
+  const blocking = blockingCount(d);
   const met = d?.readiness_met ?? 0;
   const total = d?.readiness_total ?? 14;
-  const failing = Object.entries(d?.readiness_flags ?? {}).find(([, v]) => !v)?.[0];
-  const rec = d ? recommendedAction(d) : null;
-  const citations = [
-    ...new Set(
-      (d?.all_signals ?? [])
-        .flatMap((s) => [s.citation, s.payer_citation])
-        .filter((c): c is string => Boolean(c)),
-    ),
-  ];
+  const failing = failingFlag(d);
+  const rec = recommendedAction(d);
+  const citations = citationsOf(d);
   const hasNarrativeGap = (d?.all_signals ?? []).some((s) =>
     s.signal_code.endsWith("NARRATIVE_MISSING"),
   );
