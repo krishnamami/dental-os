@@ -23,13 +23,18 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from api.auth import assert_tenant_allowed, require_claims_or_demo, tenant_filter
+from api.auth import (
+    assert_tenant_allowed,
+    require_admin,
+    require_claims_or_demo,
+    tenant_filter,
+)
 
 from api.schemas import (
     AppealResponse,
@@ -981,19 +986,13 @@ async def portfolio_summary(
 # When that table is reconciled this can read it and save the work.
 # ─────────────────────────────────────────────────────────────────────
 
-# There is no schedule in dental-os. These five are the demo morning; a
-# pre-D not listed here is not "today's patient" and is skipped.
-DEMO_TIMES: dict[str, str] = {
-    "PRED-SIM-DA-A01": "9:00 AM",
-    "PRED-SIM-DA-D04": "9:30 AM",
-    "PRED-SIM-DA-U01": "10:00 AM",
-    "PRED-SIM-DA-U02": "10:30 AM",
-    "PRED-SIM-DA-B04": "11:00 AM",
-}
+def _fmt_time(t) -> str:
+    """09:00 -> "9:00 AM". The DB holds a TIME; the desk reads a clock."""
+    if t is None:
+        return ""
+    hour = t.hour % 12 or 12
+    return f"{hour}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}"
 
-# NPI -> display name. dental-simulator stores the provider upper-cased
-# ("SRIDHAR CHINTA"); a patient-facing screen wants a name, not a shout.
-PROVIDER_NAMES: dict[str, str] = {"1134534266": "Dr. Sridhar Chinta"}
 
 _PROC_NAMES = {
     "D6010": "Implant", "D7953": "Bone graft", "D6065": "Crown",
@@ -1025,6 +1024,32 @@ async def checkin_today(
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     sim, os_pool = _pools(request)
 
+    # The schedule is the source of "today". A pre-D with no appointment
+    # row is not today's patient, and a cancelled one is not either.
+    appts = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT pred_request_id, appointment_time, procedure_summary
+        FROM appointments
+        WHERE tenant_id = $1
+          AND appointment_date = CURRENT_DATE
+          AND status <> 'cancelled'
+        ORDER BY appointment_time
+        """,
+        tenant,
+    )
+    if not appts:
+        return []
+    schedule = {
+        r["pred_request_id"]: {
+            "time": _fmt_time(r["appointment_time"]),
+            "summary": r["procedure_summary"],
+            # Position in the morning, for the sort at the end.
+            "slot": i,
+        }
+        for i, r in enumerate(appts)
+    }
+
     rows = await fetch_with_tenant(
         sim, tenant,
         """
@@ -1045,8 +1070,27 @@ async def checkin_today(
                ON ps.pred_request_id = pr.pred_request_id
         WHERE pr.tenant_id = $1 AND pr.pred_request_id = ANY($2::text[])
         """,
-        tenant, list(DEMO_TIMES),
+        tenant, list(schedule),
     )
+
+    # Display names from `providers`, not a dict in this file. The
+    # simulator stores them upper-cased ("SRIDHAR CHINTA"); a screen a
+    # patient can see wants a name, not a shout.
+    prov_rows = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT provider_npi, first_name, last_name, credential "
+        "FROM providers WHERE tenant_id = $1",
+        tenant,
+    )
+
+    def _display(npi: str | None) -> str:
+        for p in prov_rows:
+            if p["provider_npi"] == npi:
+                first = (p["first_name"] or "").title()
+                last = (p["last_name"] or "").title()
+                name = f"{first} {last}".strip()
+                return f"Dr. {name}" if name else (npi or "Provider")
+        return npi or "Provider"
 
     checked = await execute_os_with_tenant(
         os_pool, tenant,
@@ -1163,9 +1207,13 @@ async def checkin_today(
         out.append({
             "pred_request_id": rid,
             "patient_name": row["patient_name"],
-            "appointment_time": DEMO_TIMES[rid],
+            "appointment_time": schedule[rid]["time"],
             "procedures": codes,
-            "procedure_summary": _procedure_summary(codes),
+            # The schedule's own wording when the practice set one,
+            # otherwise derived from the CDT codes on the pre-D.
+            "procedure_summary": (
+                schedule[rid]["summary"] or _procedure_summary(codes)
+            ),
             "payer_name": _payer_name(row["payer_id"]),
             "payer_id": row["payer_id"],
             # From eligibility_profiles — the payer's own identifier,
@@ -1175,8 +1223,7 @@ async def checkin_today(
             # wins at a check-in desk.
             "member_id": row["member_id"],
             "enrollment_months": months,
-            "provider_name": PROVIDER_NAMES.get(
-                row["provider_npi"], row["provider_npi"] or "Provider"),
+            "provider_name": _display(row["provider_npi"]),
             "provider_npi": row["provider_npi"],
             "insurance_active": True,
             "provider_in_network": True,
@@ -1194,14 +1241,75 @@ async def checkin_today(
             "checked_in_at": at.isoformat() if at else None,
         })
 
-    # Sort by status, then by CLOCK time. Sorting the display string
-    # puts "11:00 AM" before "9:00 AM", which is how the 11 o'clock
-    # patient ends up at the top of the morning list.
-    slot = {rid: i for i, rid in enumerate(DEMO_TIMES)}
+    # Sort by status, then by CLOCK time. The schedule query is ordered
+    # by appointment_time, so its index is the clock — sorting the
+    # display string would put "11:00 AM" before "9:00 AM".
     order = {"heads_up": 0, "clear": 1, "checked_in": 2}
     out.sort(key=lambda x: (order.get(x["status"], 3),
-                            slot.get(x["pred_request_id"], 99)))
+                            schedule[x["pred_request_id"]]["slot"]))
     return out
+
+
+class AppointmentIn(BaseModel):
+    tenant_id: str
+    pred_request_id: str
+    patient_name: str
+    appointment_date: str  # YYYY-MM-DD
+    appointment_time: str  # HH:MM
+    procedure_summary: str
+    provider_npi: str
+    pms_source: str = "manual"
+    pms_appointment_id: str | None = None
+
+
+@router.post("/integrations/appointments")
+async def create_appointment(
+    body: AppointmentIn, request: Request, claims=Depends(require_admin)
+) -> dict:
+    """Accept an appointment from a practice management system.
+
+    accord_admin only. This writes into ANOTHER tenant's schedule by
+    design — an integration runs on behalf of the practice, not as one
+    of its users — which is exactly why it is not open to a practice
+    login. When a per-tenant API key exists, that is what should carry
+    this instead of a human admin's token.
+    """
+    _, os_pool = _pools(request)
+    try:
+        appt_date = date.fromisoformat(body.appointment_date)
+        hh, mm = (int(x) for x in body.appointment_time.split(":")[:2])
+        appt_time = dtime(hh, mm)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            422,
+            "appointment_date must be YYYY-MM-DD and appointment_time HH:MM",
+        )
+
+    rows = await execute_os_with_tenant(
+        os_pool, body.tenant_id,
+        """
+        INSERT INTO appointments
+          (tenant_id, pred_request_id, patient_name, appointment_date,
+           appointment_time, procedure_summary, provider_npi,
+           pms_source, pms_appointment_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        ON CONFLICT (tenant_id, pred_request_id, appointment_date)
+        DO UPDATE SET appointment_time = EXCLUDED.appointment_time,
+                      procedure_summary = EXCLUDED.procedure_summary,
+                      patient_name = EXCLUDED.patient_name,
+                      provider_npi = EXCLUDED.provider_npi,
+                      pms_source = EXCLUDED.pms_source,
+                      pms_appointment_id = EXCLUDED.pms_appointment_id
+        RETURNING appointment_id
+        """,
+        body.tenant_id, body.pred_request_id, body.patient_name,
+        appt_date, appt_time, body.procedure_summary, body.provider_npi,
+        body.pms_source, body.pms_appointment_id,
+    )
+    return {
+        "status": "created",
+        "appointment_id": rows[0]["appointment_id"] if rows else None,
+    }
 
 
 class CheckInRequest(BaseModel):

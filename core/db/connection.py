@@ -107,30 +107,40 @@ async def get_os_pool() -> asyncpg.Pool:
 async def get_admin_pool() -> asyncpg.Pool:
     """Elevated read pool for cross-tenant aggregates.
 
-    ⚠ IT DOES NOT BYPASS RLS ON THIS DATABASE, and nothing in dental-os
-    should be written as though it does. Measured against the live RDS:
+    ⚠ THIS POOL *DOES* BYPASS RLS. An earlier version of this docstring
+    said the opposite; it was wrong, and anything written on that
+    assumption needs re-reading.
 
-        pred_requests / pred_states / cost_estimates
-            relrowsecurity = true, relforcerowsecurity = TRUE
-        dental_admin
-            rolsuper = false, rolbypassrls = FALSE
+    Measured against the live RDS on 7 Aug 2026, with app.tenant_id set:
 
-    FORCE row-level security binds the table OWNER as well, and only a
-    superuser or a role holding BYPASSRLS escapes it. `dental_admin`
-    owns these tables and holds neither, so connecting as admin returns
-    exactly the same single-tenant slice as `dental_app` — while
-    handing the caller DDL rights it has no use for.
+        tenant=suwanee   dental_admin  decision_outputs = 486
+                         dental_app    decision_outputs = 401
+        tenant=tampa     dental_admin  decision_outputs = 486
+                         dental_app    decision_outputs =  42
 
-    A cross-tenant aggregate therefore has to iterate tenants and set
-    app.tenant_id for each. That is what
-    DSOPortfolioManager.aggregate_all_tenants does, and it needs no
-    elevated credential at all.
+    The admin count does not move with the tenant. The tables really
+    are FORCE row-level security and neither role carries rolbypassrls
+    directly — the escape is by MEMBERSHIP:
 
-    This helper exists so the seam is named and configurable: if the
-    tables are ever moved off FORCE, or a BYPASSRLS reporting role is
-    created, the aggregate switches to a single query by pointing
-    DENTAL_ADMIN_DATABASE_URL at it. Until then it falls back to
-    DATABASE_URL and is functionally the read pool.
+        dental_admin -> rds_superuser -> pg_read_all_data
+                                      -> pg_write_all_data
+
+    pg_read_all_data bypasses RLS for SELECT by definition, and RDS
+    grants it to rds_superuser. Checking `rolbypassrls` on the role
+    itself is what hid this: the flag is false and the privilege is
+    inherited anyway.
+
+    What follows from that:
+
+      · NEVER use this pool for a per-patient read. It will happily
+        return another practice's chart, and no policy will stop it.
+      · A cross-tenant aggregate still iterates tenants and sets
+        app.tenant_id per tenant — DSOPortfolioManager does this — so
+        it works on the ordinary pool too and does not need this one.
+        Keep it that way: the iteration is what makes the per-tenant
+        numbers attributable.
+      · The one thing this pool is genuinely for is DDL and
+        maintenance, not reporting.
 
     NEVER use this for per-patient reads. The aggregate view is the
     only justification for an elevated role, and it is a weak one while
