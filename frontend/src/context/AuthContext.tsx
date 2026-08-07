@@ -109,21 +109,9 @@ function setStored(key: string, value: string | null) {
   }
 }
 
-/**
- * The token rides on the shared axios client, not a second fetch
- * wrapper of its own.
- *
- * Two reasons. It inherits the non-JSON guard in useApi — production's
- * SPA fallback answers an unrouted /api path with index.html and a
- * 200, and without that guard a login would "succeed" against a page
- * of HTML. And when the data endpoints do start requiring a token,
- * they are already sending one.
- */
-api.interceptors.request.use((config) => {
-  const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
+// The Authorization and X-Demo-Mode headers are attached by the
+// interceptor in useApi.ts, not here — it has to be registered whether
+// or not this module was imported.
 
 interface LoginPayload {
   token: string;

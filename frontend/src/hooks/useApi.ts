@@ -26,6 +26,40 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+/** Where AuthContext keeps the token. Duplicated as a literal rather
+ *  than imported, because AuthContext imports THIS module — and an
+ *  interceptor that only registers when the context happens to have
+ *  been loaded is a request that silently goes out unauthenticated. */
+const TOKEN_KEY = "accord_dental_token";
+
+/**
+ * Every request carries whatever credential this tab has.
+ *
+ * A signed-in tab sends its bearer token. A ?demo=true visitor has no
+ * token and sends X-Demo-Mode instead, which the API accepts for READS
+ * of the suwanee_smiles corpus only — see require_claims_or_demo in
+ * dental-os. Sending neither now means 401 on every data route, which
+ * is the point of the change this belongs to.
+ *
+ * isDemo is read from the URL rather than from useDemo(): an axios
+ * interceptor is not a component and cannot call a hook. Same source
+ * of truth, same parsing rule — presence counts, only an explicit
+ * ?demo=false turns it off.
+ */
+api.interceptors.request.use((config) => {
+  try {
+    const token = window.localStorage.getItem(TOKEN_KEY);
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  } catch {
+    // Safari private mode. Fall through to demo/anonymous.
+  }
+  const raw = new URLSearchParams(window.location.search).get("demo");
+  if (raw !== null && raw !== "false" && raw !== "0") {
+    config.headers["X-Demo-Mode"] = "true";
+  }
+  return config;
+});
+
 /**
  * FastAPI puts its message in `detail`. Surfacing that instead of
  * axios's generic "Request failed with status code 404" is the
