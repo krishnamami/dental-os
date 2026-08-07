@@ -1,59 +1,113 @@
 /**
  * C-01 — sign in.
  *
- * ⚠ THIS IS NOT AUTHENTICATION. Any email and any non-empty password
- * signs you in as a dentist. There is no identity provider, no token,
- * and no server-side check — the role goes into localStorage and the
- * app believes it.
+ * Real now: POST /api/auth/login, bcrypt-verified server-side, JWT
+ * back. The role in the token is the server's answer, not this
+ * screen's suggestion — the old role picker is gone with it.
  *
- * Deliberate for a scaffold, and a hard blocker before real patient
- * data is served. When that changes it is not only this screen: the API
- * has to enforce role AND tenant on every request, and AuthContext
- * becomes a cache of what the server already decided rather than the
- * decision itself.
- *
- * The role selector below is a development affordance, not a product
- * feature — it exists so the five role-specific shells can be built and
- * reviewed before there is anything to authenticate against.
+ * ⚠ THE DEMO PANEL PUBLISHES ELEVEN WORKING CREDENTIALS, one of them
+ * an accord_admin that can impersonate every other user, on a page
+ * anyone on the internet can reach. That is a deliberate trade while
+ * the corpus is synthetic and the whole point is a self-serve demo.
+ * It has to come out before a real patient exists in that database —
+ * along with the accounts themselves.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { ROLES, ROLE_LABELS, useAuth } from "../context/AuthContext";
-import { HOME_FOR_ROLE } from "../routes";
-import type { Role } from "../types/dental";
 import { AccordLogo } from "../components/AccordLogo";
+import { statusOf, useAuth } from "../context/AuthContext";
+import type { Role } from "../types/dental";
 
-const TENANTS = [
-  { id: "suwanee_smiles", label: "Suwanee Smiles Dental — GA" },
-  { id: "tampa_smiles", label: "Tampa Bay Smiles — FL" },
-  { id: "dallas_dental", label: "Dallas Family Dental — TX" },
+const ROLE_BADGE: Record<Role, { label: string; cls: string }> = {
+  dentist: { label: "Dentist", cls: "bg-accord-green-50 text-accord-green-700" },
+  dso_owner: { label: "DSO owner", cls: "bg-blue-50 text-blue-700" },
+  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
+  revenue_ops: { label: "Revenue ops", cls: "bg-amber-50 text-amber-700" },
+  accord_admin: { label: "Admin", cls: "bg-purple-50 text-purple-700" },
+};
+
+const DEMO_GROUPS: Array<{
+  tenant: string;
+  users: Array<{ name: string; email: string; role: Role }>;
+}> = [
+  {
+    tenant: "Suwanee Smiles Dental",
+    users: [
+      { name: "Dr. Sridhar Chinta", email: "drchinta@suwaneesmiles.com", role: "dentist" },
+      { name: "Dr. Shyam Patel", email: "drshyam@suwaneesmiles.com", role: "dso_owner" },
+      { name: "Sarah R.", email: "sarah@suwaneesmiles.com", role: "front_desk" },
+      { name: "Kim B.", email: "billing@suwaneesmiles.com", role: "revenue_ops" },
+    ],
+  },
+  {
+    tenant: "Tampa Bay Smiles",
+    users: [
+      { name: "Dr. Maria Rodriguez", email: "drrodriguez@tampabaysmiles.com", role: "dentist" },
+      { name: "Dr. Shyam Patel", email: "drshyam@tampabaysmiles.com", role: "dso_owner" },
+      { name: "Sarah T.", email: "sarah@tampabaysmiles.com", role: "front_desk" },
+      { name: "Kim T.", email: "billing@tampabaysmiles.com", role: "revenue_ops" },
+    ],
+  },
+  {
+    tenant: "Dallas Family Dental",
+    users: [
+      { name: "Dr. James Wilson", email: "drwilson@dallasfamilydental.com", role: "dentist" },
+      { name: "Kim D.", email: "billing@dallasfamilydental.com", role: "revenue_ops" },
+    ],
+  },
+  {
+    tenant: "Accord platform",
+    users: [
+      { name: "Accord Admin", email: "admin@accorddental.io", role: "accord_admin" },
+    ],
+  },
 ];
 
 export default function Login() {
-  const { signIn } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const passwordRef = useRef<HTMLInputElement>(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("dentist");
-  const [tenantId, setTenantId] = useState(TENANTS[0].id);
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const from = (location.state as { from?: string } | null)?.from;
 
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    // The only failure this can produce is an empty field. There is
-    // nothing to authenticate against yet.
-    if (!email.trim() || !password.trim()) {
-      setError("Invalid email or password");
-      return;
-    }
+    if (busy) return;
     setError("");
-    signIn(role, tenantId);
-    navigate(from ?? HOME_FOR_ROLE[role], { replace: true });
+    setBusy(true);
+    try {
+      await login(email, password);
+      // NOT homeRoute — this component read it before login resolved,
+      // so it still holds the signed-out default. /app re-reads the
+      // role from context and forwards, one render later.
+      navigate(from ?? "/app", { replace: true });
+    } catch (err) {
+      // Never echo the server's wording for a bad credential. The API
+      // deliberately says the same thing for a wrong password and an
+      // unknown email; repeating anything more specific here would
+      // undo that.
+      const status = statusOf(err);
+      setError(
+        status === 401 || status === undefined
+          ? "Invalid email or password"
+          : "Could not reach the sign-in service. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function fill(addr: string) {
+    setEmail(addr);
+    setError("");
+    passwordRef.current?.focus();
   }
 
   const field =
@@ -61,10 +115,10 @@ export default function Login() {
   const label = "mb-1 block text-[12.5px] font-medium text-gray-700";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-5 py-10">
-      <div className="w-full max-w-sm">
+    <div className="flex min-h-screen items-start justify-center bg-gray-50 px-5 py-10">
+      <div className="w-full max-w-md">
         <div className="text-center">
-          <Link to="/" className="inline-block">
+          <Link to="/" className="inline-flex justify-center">
             <AccordLogo size={30} />
           </Link>
           <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.01em] text-gray-900">
@@ -81,11 +135,12 @@ export default function Login() {
         >
           <div>
             <label className={label} htmlFor="email">
-              Email
+              Work email
             </label>
             <input
               id="email"
               type="email"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@practice.com"
@@ -99,50 +154,14 @@ export default function Login() {
             </label>
             <input
               id="password"
+              ref={passwordRef}
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               className={field}
             />
-          </div>
-
-          {/* Development affordance — see the header. */}
-          <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-3.5">
-            <div>
-              <label className={label} htmlFor="role">
-                Sign in as
-              </label>
-              <select
-                id="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value as Role)}
-                className={field}
-              >
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {ROLE_LABELS[r]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={label} htmlFor="tenant">
-                Practice
-              </label>
-              <select
-                id="tenant"
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                className={field}
-              >
-                {TENANTS.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label.split(" — ")[0]}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
 
           {error && (
@@ -153,9 +172,11 @@ export default function Login() {
 
           <button
             type="submit"
-            className="w-full rounded-lg bg-accord-green-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accord-green-700"
+            disabled={busy}
+            className="min-h-[44px] w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+            style={{ backgroundColor: "#0F4D37" }}
           >
-            Sign in
+            {busy ? "Signing in…" : "Sign in"}
           </button>
 
           <p className="text-center text-[13px] text-gray-500">
@@ -163,10 +184,60 @@ export default function Login() {
               to="/workbench?demo=true"
               className="font-medium text-accord-green-900 hover:text-accord-green-700"
             >
-              Try demo →
+              Try the demo without signing in →
             </Link>
           </p>
         </form>
+
+        {/* ── Demo accounts ─────────────────────────────────────── */}
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
+          <p className="text-[12px] font-semibold text-gray-900">
+            Demo accounts{" "}
+            <span className="font-normal text-gray-500">
+              · password: <code className="font-mono">demo2026</code>
+            </span>
+          </p>
+          <p className="mt-1 text-[11px] text-gray-400">
+            Click a name to fill the email. Every account reads the same
+            synthetic corpus.
+          </p>
+
+          {DEMO_GROUPS.map((g) => (
+            <div key={g.tenant} className="mt-3.5">
+              <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-gray-400">
+                {g.tenant}
+              </p>
+              <ul className="divide-y divide-gray-100">
+                {g.users.map((u) => {
+                  const badge = ROLE_BADGE[u.role];
+                  return (
+                    <li key={u.email}>
+                      <button
+                        type="button"
+                        onClick={() => fill(u.email)}
+                        className="flex w-full items-center gap-2 rounded px-1.5 py-2 text-left transition hover:bg-gray-50"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12.5px] font-medium text-gray-800">
+                            {u.name}
+                          </span>
+                          <span className="block truncate font-mono text-[10.5px] text-gray-400">
+                            {u.email}
+                          </span>
+                        </span>
+                        <span
+                          className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-semibold ${badge.cls}`}
+                        >
+                          {badge.label}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
 
         <p className="mt-6 text-center text-[12.5px] text-gray-500">
           Request access →{" "}

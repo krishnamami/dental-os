@@ -1,17 +1,20 @@
 /**
- * Who is looking, and at which practice.
+ * Who is looking, and on behalf of which practice.
  *
- * ⚠ THIS IS NOT AUTHENTICATION. There is no identity provider behind it
- * yet, no token, and no server-side check. It holds a role in React
- * state so the UI can decide what to render, and a determined visitor
- * can set any role they like from the console.
+ * ⚠ THE ROUTE GUARDS HERE ARE USABILITY, NOT SECURITY.
  *
- * That is acceptable for a scaffold and NOT acceptable once real
- * patient data is served. Before that: the API has to enforce the role
- * and the tenant on every request, and this context becomes a cache of
- * what the server already decided rather than the decision itself.
- * Route guards below are a usability feature — they keep a front-desk
- * user out of the admin console — not a security boundary.
+ * The token is real now — issued by POST /api/auth/login, signed
+ * server-side, verified on /auth/me, /auth/impersonate and
+ * /auth/users. But the DATA endpoints are still open: anyone can GET
+ * /api/decisions/{id} with no token at all. So hiding a nav item stops
+ * a front-desk user wandering into the DSO page; it does not stop
+ * anyone reading another practice's pre-Ds.
+ *
+ * Closing that needs a dependency on every data route in dental-os
+ * that takes tenant_id from the token's claims instead of trusting the
+ * caller. Until then this file decides what the UI OFFERS, not what
+ * the API ALLOWS, and the distinction matters the day the corpus stops
+ * being synthetic.
  */
 import {
   createContext,
@@ -23,8 +26,9 @@ import {
   type ReactNode,
 } from "react";
 
+import { api } from "../hooks/useApi";
 import { useDemo } from "../hooks/useDemo";
-import type { Role } from "../types/dental";
+import type { AuthUser, ImpersonatedUser, Role } from "../types/dental";
 
 export const ROLES: Role[] = [
   "front_desk",
@@ -42,95 +46,309 @@ export const ROLE_LABELS: Record<Role, string> = {
   accord_admin: "Accord admin",
 };
 
-interface AuthState {
-  role: Role | null;
-  tenantId: string | null;
-  isDemo: boolean;
-  isAuthenticated: boolean;
-  /**
-   * True until the provider's first effect has run.
-   *
-   * ProtectedRoute renders nothing while this is true, so a guard never
-   * decides "not signed in" against state that has not settled.
-   *
-   * ⚠ Today nothing here is actually async: the stored session is read
-   * synchronously by useState's initializer, and demo mode is derived
-   * from the URL in a useMemo. So this flag is true for exactly one
-   * committed render and then false forever. It is a seam for the real
-   * asynchronous check — a token exchange, a /me call — not a fix for
-   * a race that currently exists.
-   */
-  isLoading: boolean;
-  signIn: (role: Role, tenantId: string) => void;
-  signOut: () => void;
-}
+const TOKEN_KEY = "accord_dental_token";
+const VIEWAS_KEY = "accord_dental_viewas";
+const ORIG_KEY = "accord_dental_orig_token";
 
-const AuthContext = createContext<AuthState | undefined>(undefined);
+/** Which products a role may open. */
+const ROLE_PRODUCTS: Record<Role, string[]> = {
+  front_desk: ["coverage", "workbench"],
+  revenue_ops: ["revenue_ops", "workbench", "coverage"],
+  dentist: ["workbench", "coverage", "evidence", "revenue_ops", "dso"],
+  dso_owner: ["dso", "revenue_ops", "workbench"],
+  accord_admin: [
+    "workbench",
+    "coverage",
+    "evidence",
+    "revenue_ops",
+    "dso",
+    "admin",
+  ],
+};
 
-const STORAGE_KEY = "accord.session";
+/** Which sidebar entries a role sees, by label. */
+const ROLE_NAV: Record<Role, string[]> = {
+  front_desk: ["Coverage", "Pre-D"],
+  revenue_ops: ["Revenue ops", "Pre-D", "Coverage"],
+  dentist: ["Pre-D", "Coverage", "Clinical", "Revenue ops", "DSO"],
+  dso_owner: ["DSO", "Revenue ops", "Pre-D"],
+  accord_admin: [
+    "Pre-D",
+    "Coverage",
+    "Clinical",
+    "Revenue ops",
+    "DSO",
+    "Admin",
+  ],
+};
 
-interface StoredSession {
-  role: Role;
-  tenantId: string;
-}
+/** Where a role lands after signing in. */
+export const HOME_FOR_ROLE: Record<Role, string> = {
+  front_desk: "/coverage",
+  revenue_ops: "/revenue-ops",
+  dentist: "/workbench",
+  dso_owner: "/dso",
+  accord_admin: "/admin",
+};
 
-function readStored(): StoredSession | null {
+export function getToken(): string | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredSession;
-    return ROLES.includes(parsed.role) && parsed.tenantId ? parsed : null;
+    return window.localStorage.getItem(TOKEN_KEY);
   } catch {
-    // A corrupt or unavailable localStorage must not blank the app.
+    // Safari private mode throws on localStorage. Signed out beats crashed.
     return null;
   }
 }
 
+function setStored(key: string, value: string | null) {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    /* see getToken */
+  }
+}
+
+/**
+ * The token rides on the shared axios client, not a second fetch
+ * wrapper of its own.
+ *
+ * Two reasons. It inherits the non-JSON guard in useApi — production's
+ * SPA fallback answers an unrouted /api path with index.html and a
+ * 200, and without that guard a login would "succeed" against a page
+ * of HTML. And when the data endpoints do start requiring a token,
+ * they are already sending one.
+ */
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+interface LoginPayload {
+  token: string;
+  user: AuthUser;
+}
+
+/** HTTP status from an axios rejection, whatever shape it arrived in.
+ *  Callers branch on 401 vs "the network is broken", and those two must
+ *  not collapse into the same message. */
+export function statusOf(err: unknown): number | undefined {
+  const e = err as { status?: number; response?: { status?: number } };
+  return e?.response?.status ?? e?.status;
+}
+
+/**
+ * Reject a token payload that is not one.
+ *
+ * api.post does not go through useApi's get() helper, so it does not
+ * inherit the non-JSON guard there — and production answers an
+ * unrouted /api path with index.html at status 200. Without this, a
+ * login against a broken route would "succeed" and store the string
+ * "undefined" as a bearer token.
+ */
+function asPayload(data: unknown): LoginPayload {
+  const d = data as Partial<LoginPayload>;
+  if (!d || typeof d.token !== "string" || !d.user?.role) {
+    throw Object.assign(
+      new Error("The sign-in service returned something that is not a session."),
+      { status: 502 },
+    );
+  }
+  return d as LoginPayload;
+}
+
+interface AuthState {
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  isDemo: boolean;
+  user: AuthUser | null;
+  effectiveUser: AuthUser | null;
+  viewAs: ImpersonatedUser | null;
+  /** Mirrors of effectiveUser — most callers only ever wanted these. */
+  role: Role | null;
+  tenantId: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  impersonate: (u: ImpersonatedUser) => Promise<void>;
+  stopImpersonating: () => Promise<void>;
+  hasProduct: (product: string) => boolean;
+  navAllows: (label: string) => boolean;
+  homeRoute: string;
+}
+
+const AuthContext = createContext<AuthState | undefined>(undefined);
+
+/** The demo identity. Not a session — no token is issued, and the API
+ *  is read anonymously, which is all ?demo=true ever did. */
+function demoUser(tenant: string): AuthUser {
+  return {
+    user_id: "demo-drchinta",
+    email: "drchinta@suwaneesmiles.com",
+    name: "Dr. Sridhar Chinta",
+    role: "dentist",
+    tenant_id: tenant,
+    tenant_name: "Suwanee Smiles Dental",
+    tenant_address: "3155 Peachtree Pkwy Ste 120, Suwanee GA",
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { isDemo, demoTenant } = useDemo();
-  const [session, setSession] = useState<StoredSession | null>(readStored);
+
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (session) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
+  const [viewAs, setViewAs] = useState<ImpersonatedUser | null>(() => {
+    try {
+      const raw = window.localStorage.getItem(VIEWAS_KEY);
+      return raw ? (JSON.parse(raw) as ImpersonatedUser) : null;
+    } catch {
+      return null;
     }
-    setIsLoading(false);
-  }, [session]);
+  });
 
-  const signIn = useCallback((role: Role, tenantId: string) => {
-    setSession({ role, tenantId });
+  /**
+   * Session restore.
+   *
+   * Skipped entirely in demo mode: a visitor following ?demo=true has
+   * no token, and firing /auth/me would land a 401 a beat after the
+   * demo user was set — overwriting it and bouncing them to /login.
+   */
+  useEffect(() => {
+    if (isDemo) {
+      setUser(demoUser(demoTenant ?? "suwanee_smiles"));
+      setIsLoading(false);
+      return;
+    }
+    if (!getToken()) {
+      setUser(null);
+      setIsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<LoginPayload>("/auth/me")
+      .then((res) => {
+        if (cancelled) return;
+        // /auth/me reissues, so a role changed in the database takes
+        // effect without waiting out the 7-day expiry.
+        const data = asPayload(res.data);
+        setStored(TOKEN_KEY, data.token);
+        setUser(data.user);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Expired, or signed by a key this deployment no longer holds.
+        // All the same to a visitor: signed out.
+        setStored(TOKEN_KEY, null);
+        setStored(VIEWAS_KEY, null);
+        setStored(ORIG_KEY, null);
+        setUser(null);
+        setViewAs(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDemo, demoTenant]);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const res = await api.post<LoginPayload>("/auth/login", {
+      email,
+      password,
+    });
+    const data = asPayload(res.data);
+    setStored(TOKEN_KEY, data.token);
+    setStored(VIEWAS_KEY, null);
+    setStored(ORIG_KEY, null);
+    setViewAs(null);
+    setUser(data.user);
   }, []);
 
-  const signOut = useCallback(() => setSession(null), []);
+  const logout = useCallback(() => {
+    // Client-side only. The token stays valid at the API until it
+    // expires — there is no revocation list, so "sign out" means
+    // "forget", not "invalidate".
+    setStored(TOKEN_KEY, null);
+    setStored(VIEWAS_KEY, null);
+    setStored(ORIG_KEY, null);
+    setUser(null);
+    setViewAs(null);
+  }, []);
+
+  const impersonate = useCallback(async (u: ImpersonatedUser) => {
+    // Read the admin's own token first, but only commit it once the
+    // request succeeds — a failed impersonation must change nothing.
+    const orig = getToken();
+    const res = await api.post<LoginPayload>("/auth/impersonate", {
+      user_id: u.user_id,
+    });
+    const data = asPayload(res.data);
+    if (orig) setStored(ORIG_KEY, orig);
+    setStored(TOKEN_KEY, data.token);
+    setStored(VIEWAS_KEY, JSON.stringify(u));
+    setViewAs(u);
+    setUser(data.user);
+  }, []);
+
+  const stopImpersonating = useCallback(async () => {
+    const orig = window.localStorage.getItem(ORIG_KEY);
+    setStored(TOKEN_KEY, orig);
+    setStored(VIEWAS_KEY, null);
+    setStored(ORIG_KEY, null);
+    setViewAs(null);
+    if (!orig) {
+      // No way back — the admin token is gone. Sign out rather than
+      // leave the UI claiming to be someone it cannot prove.
+      setUser(null);
+      return;
+    }
+    try {
+      const data = asPayload((await api.get<LoginPayload>("/auth/me")).data);
+      setStored(TOKEN_KEY, data.token);
+      setUser(data.user);
+    } catch {
+      setStored(TOKEN_KEY, null);
+      setUser(null);
+    }
+  }, []);
 
   const value = useMemo<AuthState>(() => {
-    // Demo mode wins over any stored session. A prospect following a
-    // ?demo=true link must see the demo, not whatever role happened to
-    // be left in localStorage from a previous visit.
-    if (isDemo) {
-      return {
-        role: "dentist",
-        tenantId: demoTenant,
-        isDemo: true,
-        isAuthenticated: true,
-        isLoading,
-        signIn,
-        signOut,
-      };
-    }
+    // After impersonating, `user` IS the impersonated user — the API
+    // returned them. viewAs exists to say so out loud in the banner.
+    const effectiveUser = user;
+    const role = effectiveUser?.role ?? null;
     return {
-      role: session?.role ?? null,
-      tenantId: session?.tenantId ?? null,
-      isDemo: false,
-      isAuthenticated: Boolean(session),
+      isAuthenticated: isDemo || Boolean(user),
       isLoading,
-      signIn,
-      signOut,
+      isDemo,
+      user,
+      effectiveUser,
+      viewAs,
+      role,
+      tenantId: effectiveUser?.tenant_id ?? null,
+      login,
+      logout,
+      impersonate,
+      stopImpersonating,
+      hasProduct: (product: string) =>
+        role ? (ROLE_PRODUCTS[role] ?? []).includes(product) : false,
+      navAllows: (label: string) =>
+        role ? (ROLE_NAV[role] ?? []).includes(label) : false,
+      homeRoute: role ? (HOME_FOR_ROLE[role] ?? "/workbench") : "/workbench",
     };
-  }, [isDemo, demoTenant, session, isLoading, signIn, signOut]);
+  }, [
+    isDemo,
+    isLoading,
+    user,
+    viewAs,
+    login,
+    logout,
+    impersonate,
+    stopImpersonating,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

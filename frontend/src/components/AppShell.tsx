@@ -9,8 +9,8 @@
  * Wraps every protected route via <Outlet />, which is what keeps the
  * shell from re-mounting (and re-fetching) on every navigation.
  */
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Eye, LogOut } from "lucide-react";
 
 import { ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { useDemoLink } from "../hooks/useDemo";
@@ -27,30 +27,76 @@ function isActive(item: NavItem, pathname: string) {
   return pathname === base || pathname.startsWith(`${base}/`);
 }
 
-function initials(role: string, tenant: string) {
-  const a = role.charAt(0).toUpperCase();
-  const b = tenant.charAt(0).toUpperCase();
-  return `${a}${b}`;
+/** Initials from a person's name — "Dr. Sridhar Chinta" -> "SC".
+ *  Titles are dropped: a sidebar full of "DS" tells you nothing. */
+function initials(name: string): string {
+  const parts = name
+    .replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return "?";
+  return (parts[0][0] + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
 export default function AppShell() {
-  const { role, tenantId, isDemo, signOut } = useAuth();
+  const {
+    role,
+    isDemo,
+    effectiveUser,
+    viewAs,
+    navAllows,
+    stopImpersonating,
+    logout,
+  } = useAuth();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const demoLink = useDemoLink();
 
-  const items = role ? NAV_FOR_ROLE[role] : [];
+  // Two filters, not one. NAV_FOR_ROLE decides what a role's sidebar
+  // looks like; navAllows is the product gate the routes enforce. They
+  // agree today — if they ever disagree, the stricter one should win,
+  // which is what the && does.
+  const items = (role ? NAV_FOR_ROLE[role] : []).filter((i) =>
+    navAllows(i.gate),
+  );
   const title = titleForPath(pathname);
+  const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
+
+  function signOutAndLeave() {
+    logout();
+    navigate("/login", { replace: true });
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="flex">
         {/* ── Sidebar (desktop) ───────────────────────────────── */}
         <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white lg:flex">
-          <div className="flex h-[52px] items-center border-b border-gray-200 px-4">
-            <Link to={demoLink("/")}>
+          <div className="border-b border-gray-200 px-4 py-2.5">
+            <Link to={demoLink("/")} className="inline-flex">
               <AccordLogo size={24} />
             </Link>
+            <p className="mt-1 truncate text-[10px] text-slate-400">
+              {tenantName}
+            </p>
           </div>
+
+          {viewAs && (
+            <div className="border-b border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="flex items-center gap-1 text-[10px] font-medium text-amber-800">
+                <Eye size={11} />
+                Viewing as {viewAs.name}
+              </p>
+              <p className="truncate text-[9px] text-amber-600">{tenantName}</p>
+              <button
+                type="button"
+                onClick={() => void stopImpersonating()}
+                className="mt-0.5 text-[9px] text-amber-700 underline hover:text-amber-900"
+              >
+                Stop impersonating
+              </button>
+            </div>
+          )}
 
           <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
             {items.map((item) => {
@@ -76,20 +122,23 @@ export default function AppShell() {
           <div className="border-t border-gray-200 p-3">
             <div className="flex items-center gap-2.5">
               <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-accord-green-900 text-[11px] font-semibold text-white">
-                {initials(role ?? "?", tenantId ?? "?")}
+                {initials(effectiveUser?.name ?? "?")}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[12.5px] font-medium text-gray-900">
-                  {role ? ROLE_LABELS[role] : "Signed out"}
+                  {effectiveUser?.name ?? "Signed out"}
                 </p>
                 <p className="truncate text-[11px] text-gray-500">
-                  {(tenantId ?? "").replace(/_/g, " ")}
+                  {role ? ROLE_LABELS[role] : ""}
+                  {effectiveUser?.tenant_name
+                    ? ` · ${effectiveUser.tenant_name}`
+                    : ""}
                 </p>
               </div>
               {!isDemo && (
                 <button
                   type="button"
-                  onClick={signOut}
+                  onClick={signOutAndLeave}
                   aria-label="Sign out"
                   className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                 >
@@ -110,7 +159,7 @@ export default function AppShell() {
             </h1>
             <div className="flex items-center gap-2">
               <span className="hidden rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600 sm:inline">
-                {(tenantId ?? "").replace(/_/g, " ")}
+                {tenantName}
               </span>
               <Link
                 to={demoLink("/workbench")}

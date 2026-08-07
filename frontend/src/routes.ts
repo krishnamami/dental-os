@@ -33,47 +33,45 @@ export interface NavItem {
   label: string;
   to: string;
   icon: LucideIcon;
+  /**
+   * The product family this entry belongs to, in the vocabulary
+   * AuthContext.ROLE_NAV uses. Several entries share one gate — a
+   * dentist's "My patients today" and "Pre-D review" are both Pre-D —
+   * so the gate cannot be derived from the label.
+   */
+  gate: string;
 }
-
-/** Where a role goes after signing in. */
-export const HOME_FOR_ROLE: Record<Role, string> = {
-  front_desk: "/coverage",
-  revenue_ops: "/revenue-ops",
-  dentist: "/workbench",
-  dso_owner: "/dso",
-  accord_admin: "/admin",
-};
 
 export const NAV_FOR_ROLE: Record<Role, NavItem[]> = {
   dentist: [
-    { label: "My patients today", to: "/workbench", icon: CalendarCheck },
-    { label: "Clinical evidence", to: "/evidence", icon: FileSearch },
-    { label: "Pre-D review", to: "/workbench?filter=review", icon: ClipboardCheck },
+    { label: "My patients today", to: "/workbench", icon: CalendarCheck, gate: "Pre-D" },
+    { label: "Clinical evidence", to: "/evidence", icon: FileSearch, gate: "Clinical" },
+    { label: "Pre-D review", to: "/workbench?filter=review", icon: ClipboardCheck, gate: "Pre-D" },
   ],
   front_desk: [
-    { label: "Patient check-in", to: "/coverage", icon: Users },
-    { label: "Coverage check", to: "/coverage", icon: ShieldCheck },
-    { label: "Document requests", to: "/workbench?filter=docs", icon: FileText },
-    { label: "SLA queue", to: "/workbench?filter=sla", icon: Clock },
+    { label: "Patient check-in", to: "/coverage", icon: Users, gate: "Coverage" },
+    { label: "Coverage check", to: "/coverage", icon: ShieldCheck, gate: "Coverage" },
+    { label: "Document requests", to: "/workbench?filter=docs", icon: FileText, gate: "Pre-D" },
+    { label: "SLA queue", to: "/workbench?filter=sla", icon: Clock, gate: "Pre-D" },
   ],
   revenue_ops: [
-    { label: "Submission queue", to: "/revenue-ops", icon: Send },
-    { label: "Conditions", to: "/revenue-ops/conditions", icon: ClipboardList },
-    { label: "Appeals", to: "/revenue-ops/appeals", icon: Receipt },
-    { label: "Analytics", to: "/revenue-ops/analytics", icon: TrendingUp },
-    { label: "Coverage checks", to: "/coverage", icon: ShieldCheck },
+    { label: "Submission queue", to: "/revenue-ops", icon: Send, gate: "Revenue ops" },
+    { label: "Conditions", to: "/revenue-ops/conditions", icon: ClipboardList, gate: "Revenue ops" },
+    { label: "Appeals", to: "/revenue-ops/appeals", icon: Receipt, gate: "Revenue ops" },
+    { label: "Analytics", to: "/revenue-ops/analytics", icon: TrendingUp, gate: "Revenue ops" },
+    { label: "Coverage checks", to: "/coverage", icon: ShieldCheck, gate: "Coverage" },
   ],
   dso_owner: [
-    { label: "Portfolio", to: "/dso", icon: BarChart3 },
-    { label: "Denial patterns", to: "/dso/denials", icon: Layers },
-    { label: "Revenue", to: "/dso/revenue", icon: TrendingUp },
-    { label: "Training", to: "/dso/training", icon: GraduationCap },
+    { label: "Portfolio", to: "/dso", icon: BarChart3, gate: "DSO" },
+    { label: "Denial patterns", to: "/dso/denials", icon: Layers, gate: "DSO" },
+    { label: "Revenue", to: "/dso/revenue", icon: TrendingUp, gate: "DSO" },
+    { label: "Training", to: "/dso/training", icon: GraduationCap, gate: "DSO" },
   ],
   accord_admin: [
-    { label: "Tenants", to: "/admin", icon: Building2 },
-    { label: "Onboard tenant", to: "/admin/onboard", icon: FolderPlus },
-    { label: "Catalogue", to: "/admin/catalogue", icon: Layers },
-    { label: "System health", to: "/admin/health", icon: Activity },
+    { label: "Tenants", to: "/admin", icon: Building2, gate: "Admin" },
+    { label: "Onboard tenant", to: "/admin/onboard", icon: FolderPlus, gate: "Admin" },
+    { label: "Catalogue", to: "/admin/catalogue", icon: Layers, gate: "Admin" },
+    { label: "System health", to: "/admin/health", icon: Activity, gate: "Admin" },
   ],
 };
 

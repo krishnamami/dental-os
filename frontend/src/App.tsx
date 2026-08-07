@@ -9,13 +9,12 @@
  * Every signed-in route renders inside <AppShell />, so the sidebar and
  * top bar do not remount (or refetch) on navigation.
  */
-import { Suspense, lazy } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Suspense, lazy, type ReactNode } from "react";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import AppShell from "./components/AppShell";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { useAuth } from "./context/AuthContext";
-import { HOME_FOR_ROLE } from "./routes";
 
 /**
  * Every page is lazy, INCLUDING the landing page.
@@ -73,8 +72,30 @@ if (typeof window !== "undefined") {
 
 /** C-02 — send a signed-in user to the page their role starts on. */
 function RoleHome() {
-  const { role } = useAuth();
-  return <Navigate to={role ? HOME_FOR_ROLE[role] : "/workbench"} replace />;
+  const { homeRoute } = useAuth();
+  return <Navigate to={homeRoute} replace />;
+}
+
+/**
+ * Redirect a role away from a product it does not hold.
+ *
+ * ⚠ USABILITY, NOT SECURITY. It stops a front-desk user landing on a
+ * DSO page they cannot read; it stops nobody from calling the API
+ * directly, because the API asks for no token yet. See AuthContext.
+ *
+ * Demo mode is a dentist, so it passes every gate a dentist holds and
+ * needs no special case.
+ */
+function ProductRoute({
+  product,
+  children,
+}: {
+  product: string;
+  children?: ReactNode;
+}) {
+  const { hasProduct, homeRoute } = useAuth();
+  if (!hasProduct(product)) return <Navigate to={homeRoute} replace />;
+  return <>{children ?? <Outlet />}</>;
 }
 
 // fallback={null}, not a spinner: with the prefetch above the workbench
@@ -93,39 +114,51 @@ export default function App() {
           <Route element={<AppShell />}>
             <Route path="/app" element={<RoleHome />} />
 
-            <Route path="/workbench" element={<WorkbenchPipeline />} />
-            <Route path="/workbench/:id" element={<WorkbenchDetail />} />
+            <Route element={<ProductRoute product="workbench" />}>
+              <Route path="/workbench" element={<WorkbenchPipeline />} />
+              <Route path="/workbench/:id" element={<WorkbenchDetail />} />
+            </Route>
 
-            <Route path="/coverage" element={<CoverageIntelligence />} />
+            <Route element={<ProductRoute product="coverage" />}>
+              <Route path="/coverage" element={<CoverageIntelligence />} />
+            </Route>
 
             {/* Both forms exist: the sidebar links to /evidence, and the
               workbench links to a specific pre-D. */}
-            <Route path="/evidence" element={<ClinicalEvidence />} />
-            <Route path="/evidence/:id" element={<ClinicalEvidence />} />
+            <Route element={<ProductRoute product="evidence" />}>
+              <Route path="/evidence" element={<ClinicalEvidence />} />
+              <Route path="/evidence/:id" element={<ClinicalEvidence />} />
+            </Route>
 
             {/* One page, four tabs, tab chosen by the path — see
               RevenueOps.tabFromPath. */}
-            <Route path="/revenue-ops" element={<RevenueOps />} />
-            <Route path="/revenue-ops/conditions" element={<RevenueOps />} />
-            <Route path="/revenue-ops/appeals" element={<RevenueOps />} />
-            <Route path="/revenue-ops/analytics" element={<RevenueOps />} />
+            <Route element={<ProductRoute product="revenue_ops" />}>
+              <Route path="/revenue-ops" element={<RevenueOps />} />
+              <Route path="/revenue-ops/conditions" element={<RevenueOps />} />
+              <Route path="/revenue-ops/appeals" element={<RevenueOps />} />
+              <Route path="/revenue-ops/analytics" element={<RevenueOps />} />
+            </Route>
 
             {/* One page, four tabs, tab chosen by the path. */}
-            <Route path="/dso" element={<DSOIntelligence />} />
-            <Route path="/dso/denials" element={<DSOIntelligence />} />
-            <Route path="/dso/revenue" element={<DSOIntelligence />} />
-            <Route path="/dso/training" element={<DSOIntelligence />} />
+            <Route element={<ProductRoute product="dso" />}>
+              <Route path="/dso" element={<DSOIntelligence />} />
+              <Route path="/dso/denials" element={<DSOIntelligence />} />
+              <Route path="/dso/revenue" element={<DSOIntelligence />} />
+              <Route path="/dso/training" element={<DSOIntelligence />} />
+            </Route>
           </Route>
         </Route>
 
         {/* Admin is the one role-gated branch. The guard is usability, not
           security — see ProtectedRoute. */}
         <Route element={<ProtectedRoute allow={["accord_admin"]} />}>
+          <Route element={<ProductRoute product="admin" />}>
           <Route element={<AppShell />}>
             <Route path="/admin" element={<AdminConsole />} />
             <Route path="/admin/onboard" element={<AdminConsole />} />
             <Route path="/admin/catalogue" element={<AdminConsole />} />
             <Route path="/admin/health" element={<AdminConsole />} />
+          </Route>
           </Route>
         </Route>
 

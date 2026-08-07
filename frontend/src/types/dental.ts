@@ -29,6 +29,31 @@ export type Role =
   | "dso_owner"
   | "accord_admin";
 
+// ── Auth ─────────────────────────────────────────────────────────────
+
+/** The `user` half of POST /auth/login, /auth/me and /auth/impersonate.
+ *  tenant_id is null for accord_admin, who belongs to the platform
+ *  rather than to a practice — so every consumer has to handle it. */
+export interface AuthUser {
+  user_id: string;
+  email: string;
+  name: string;
+  role: Role;
+  tenant_id: string | null;
+  tenant_name: string | null;
+  tenant_address: string | null;
+}
+
+/** What the admin console hands to impersonate(). A subset of AuthUser
+ *  on purpose: it is built from GET /auth/users, which does not return
+ *  the tenant's display name. */
+export interface ImpersonatedUser {
+  user_id: string;
+  name: string;
+  role: Role;
+  tenant_id: string | null;
+}
+
 export interface Signal {
   signal_code: string;
   finding: string;

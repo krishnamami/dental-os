@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useHealth, usePortfolio } from "../../../hooks/useApi";
 import { useDemoLink } from "../../../hooks/useDemo";
 import { formatPercent } from "../../../utils/format";
+import UserDirectory from "../../../components/UserDirectory";
 
 /**
  * H-10 — Accord admin.
@@ -114,6 +115,8 @@ export default function AdminConsole() {
       {/* ── Tenants ────────────────────────────────────────────── */}
       {active === "tenants" && (
         <div className="mt-4 space-y-4">
+          <UserDirectory />
+
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Metric label="Active tenants" value={String(health?.tenants ?? "—")} />
             <Metric
