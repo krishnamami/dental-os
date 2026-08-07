@@ -48,14 +48,27 @@ const DSOIntelligence = lazy(() => import("./pages/app/dso/DSOIntelligence"));
 const AdminConsole = lazy(() => import("./pages/app/admin/AdminConsole"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
-/** Shown while a route chunk is in flight. Deliberately quiet — a
- *  spinner that appears for 40ms on a warm CDN reads as jank. */
-function RouteFallback() {
-  return (
-    <div className="flex h-[200px] items-center justify-center text-[13px] text-gray-500">
-      Loading…
-    </div>
-  );
+/**
+ * Prefetch the workbench so demo mode has no loading flash.
+ *
+ * Kicked off at module evaluation, which is boot: by the time a visitor
+ * clicks through from the landing page the chunk is already in the HTTP
+ * cache and <Suspense> never suspends. On a cold /workbench?demo=true
+ * it starts in parallel with the route's own import rather than after
+ * it, so it costs nothing there either.
+ *
+ * The catch is not optional. This is a floating promise, and a chunk
+ * that 404s — a stale index.html held by a browser mid-deploy is the
+ * usual way — would otherwise surface as an unhandled rejection in
+ * every visitor's console. There is nothing to do about it here: the
+ * lazy() call will retry and fail visibly if the route is ever reached.
+ *
+ * Cost: 17 KB raw on every landing-page visit, including visitors who
+ * never sign in. Worth it while the workbench IS the demo; revisit if
+ * the landing page ever has to answer for its own byte budget.
+ */
+if (typeof window !== "undefined") {
+  import("./pages/app/workbench/WorkbenchPipeline").catch(() => {});
 }
 
 /** C-02 — send a signed-in user to the page their role starts on. */
@@ -64,9 +77,14 @@ function RoleHome() {
   return <Navigate to={role ? HOME_FOR_ROLE[role] : "/workbench"} replace />;
 }
 
+// fallback={null}, not a spinner: with the prefetch above the workbench
+// is already cached, and a placeholder that appears for 40ms on a warm
+// CDN reads as jank. The trade is that a genuinely slow first load of
+// some OTHER route shows nothing at all rather than a hint that
+// something is happening.
 export default function App() {
   return (
-    <Suspense fallback={<RouteFallback />}>
+    <Suspense fallback={null}>
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
