@@ -26,6 +26,8 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
+from api import auth as auth_module
+from api.auth import router as auth_router
 from api.routes import router
 from api.schemas import HealthResponse
 from core.db.connection import (
@@ -74,6 +76,11 @@ async def lifespan(app: FastAPI):
     app.state.tenant_id = DEFAULT_TENANT
     app.state.simulator_pool = await get_pool()
     app.state.os_pool = await get_os_pool()
+    # api.auth reaches the database through a module global rather than
+    # request.app.state, because its dependencies are plain functions
+    # with no Request to hand. Wired here so there is exactly one place
+    # the pool is created.
+    auth_module.os_pool = app.state.os_pool
     logger.info("pools open — tenant=%s", app.state.tenant_id)
     try:
         yield
@@ -81,6 +88,7 @@ async def lifespan(app: FastAPI):
         await close_pool()
         app.state.simulator_pool = None
         app.state.os_pool = None
+        auth_module.os_pool = None
 
 
 app = FastAPI(
@@ -96,6 +104,7 @@ app = FastAPI(
 )
 
 app.include_router(router, prefix=API_PREFIX)
+app.include_router(auth_router, prefix=API_PREFIX)
 
 
 async def health(request: Request) -> HealthResponse:
