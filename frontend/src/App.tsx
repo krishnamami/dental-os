@@ -39,6 +39,9 @@ const WorkbenchDetail = lazy(
 const CoverageIntelligence = lazy(
   () => import("./pages/app/coverage/CoverageIntelligence"),
 );
+const CoverageDetail = lazy(
+  () => import("./pages/app/coverage/CoverageDetail"),
+);
 const ClinicalEvidence = lazy(
   () => import("./pages/app/evidence/ClinicalEvidence"),
 );
@@ -119,8 +122,15 @@ export default function App() {
               <Route path="/workbench/:id" element={<WorkbenchDetail />} />
             </Route>
 
+            {/* /coverage/all is declared before /coverage/:id so the
+                literal wins. React Router ranks static segments above
+                dynamic ones anyway, but relying on that to keep "all"
+                from being read as a pre-D id is a trap for whoever
+                reorders these next. */}
             <Route element={<ProductRoute product="coverage" />}>
               <Route path="/coverage" element={<CoverageIntelligence />} />
+              <Route path="/coverage/all" element={<CoverageIntelligence />} />
+              <Route path="/coverage/:id" element={<CoverageDetail />} />
             </Route>
 
             {/* Both forms exist: the sidebar links to /evidence, and the

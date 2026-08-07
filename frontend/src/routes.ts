@@ -79,6 +79,7 @@ export const NAV_FOR_ROLE: Record<Role, NavItem[]> = {
 export const TITLE_FOR_PATH: Array<[string, string]> = [
   ["/workbench/", "Pre-D review"],
   ["/workbench", "Pre-D workbench"],
+  ["/coverage/all", "All pre-Ds"],
   ["/coverage", "Coverage intelligence"],
   ["/evidence", "Clinical evidence"],
   ["/revenue-ops/conditions", "Conditions"],

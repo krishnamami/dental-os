@@ -1,479 +1,596 @@
-import { useEffect, useState } from "react";
-import { ArrowLeft, Check, Printer } from "lucide-react";
+import { useMemo, useState } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Search } from "lucide-react";
 
-import AnnualMaxBar from "../../../components/AnnualMaxBar";
-import BenefitSummary from "../../../components/BenefitSummary";
-import CostTable from "../../../components/CostTable";
-import CoverageCard from "../../../components/CoverageCard";
-import DowngradeAlert from "../../../components/DowngradeAlert";
-import PayerComparison from "../../../components/PayerComparison";
+import RequestDocsModal from "../../../components/RequestDocsModal";
 import { useAuth } from "../../../context/AuthContext";
-import { usePatientSummary } from "../../../hooks/useApi";
-import { useDemo } from "../../../hooks/useDemo";
-import { formatCurrency } from "../../../utils/format";
+import { useDemoLink } from "../../../hooks/useDemo";
 
 /**
- * E-01 — the front desk's morning, as a split panel.
+ * E-01 — the front desk's two views, chosen by the URL.
  *
- * Left: who is coming in. Right: what their plan will actually pay,
- * live from GET /decisions/{id}/patient-summary. `selected` is the only
- * state that matters; everything on the right hangs off it.
+ *   /coverage      my patients today
+ *   /coverage/all  every pre-D at this practice
+ *   /coverage/:id  one patient's coverage (CoverageDetail)
  *
- * ── On the queue being static ────────────────────────────────────────
+ * ── Where the numbers come from ──────────────────────────────────────
  *
- * There is no patient directory endpoint — dental-os answers per pre-D.
- * The five rows below are a SNAPSHOT read from the live API on
- * 7 Aug 2026, not an invention: names, payers, tooth numbers and the
- * one-line finding all came back from /patient-summary. The panel on
- * the right re-fetches; this list does not.
+ * Everything below was read from the live database on 7 Aug 2026 —
+ * patient names from `patients`, decisions from `pred_states`, tooth
+ * numbers from `procedure_lines`, and the wave pills computed from the
+ * CURRENT persona bundle using the same tone rule the rest of the app
+ * uses (SignalCard.toneFor).
+ *
+ * It is static because there is no list endpoint: dental-os answers per
+ * pre-D. Forty rows would be forty requests. When one exists, this
+ * table is the thing that should read from it.
+ *
+ * The counts are SUWANEE'S, not the deployment's. The deployment holds
+ * 50 pre-Ds across three practices; a Suwanee front desk can reach 40
+ * of them and the API now enforces that. Printing 50 on their screen
+ * would advertise records they cannot open.
  */
 
-const BRAND_GREEN = "#1B5E20";
+const BRAND_GREEN = "#0F4D37";
 const BRAND_AMBER = "#F57F17";
 
-interface Patient {
+// ── Tab 1 ────────────────────────────────────────────────────────────
+
+interface QueuePatient {
   id: string;
   name: string;
+  dot: string;
   payer: string;
-  procedure: string;
-  dotColor: string;
-  status: "action" | "ready";
+  info: string;
+  status: "NEEDS ACTION" | "READY";
   finding: string;
+  insight: string;
+  basedOn: string;
+  queue: string;
 }
 
-const PATIENTS: Patient[] = [
+const ACTION: QueuePatient[] = [
   {
     id: "PRED-SIM-DA-A01",
     name: "James Mitchell",
+    dot: BRAND_AMBER,
     payer: "Delta Dental PPO",
-    procedure: "Implant + graft + crown · tooth #19",
-    dotColor: BRAND_AMBER,
-    status: "action",
-    finding: "Annual max $25 remaining · D6065 downgrade",
-  },
-  {
-    id: "PRED-SIM-DA-D04",
-    name: "Linda Taylor",
-    payer: "Delta Dental PPO",
-    // Tooth #8, not #14 — the API says so. An upper central incisor is
-    // also what a $1,650 all-ceramic crown is usually for.
-    procedure: "Crown · tooth #8",
-    dotColor: BRAND_AMBER,
-    status: "action",
-    finding: "D2740 reimbursed at the D2750 rate — verify with patient",
+    info: "Tooth #19 · Implant + graft + crown",
+    status: "NEEDS ACTION",
+    finding: "Annual max $25 remaining · D6065 downgrade to D2750",
+    insight:
+      "Verify patient understands $1,825 cost before treatment. Annual max nearly exhausted after this case.",
+    basedOn: "eligibility response, fee schedule, Delta Dental coverage rules",
+    queue: "Patient 1 of 5 · tooth #19",
   },
   {
     id: "PRED-SIM-DA-B04",
     name: "Carlos Rivera",
+    dot: BRAND_AMBER,
     payer: "Delta Dental PPO",
-    procedure: "Implant + bone graft · tooth #19",
-    dotColor: BRAND_AMBER,
-    status: "action",
-    finding: "Bundling conflict — narrative needed · patient pays $1,230",
+    info: "Tooth #19 · Implant + bone graft",
+    status: "NEEDS ACTION",
+    finding: "Bundling conflict — narrative required before submission",
+    insight:
+      "D7953 and D6010 bundled under D.7.4. Patient pays $1,230. Alert Dr. Chinta before check-in.",
+    basedOn: "coverage rules D.7.4, fee schedule, clinical note",
+    queue: "Patient 2 of 5 · tooth #19",
   },
+  {
+    id: "PRED-SIM-DA-D04",
+    name: "Linda Taylor",
+    dot: BRAND_AMBER,
+    payer: "Delta Dental PPO",
+    info: "Tooth #8 · Crown",
+    status: "NEEDS ACTION",
+    finding: "D2740 all-ceramic downgrade to D2750 — verify with patient",
+    insight:
+      "Plan reimburses at the D2750 rate; the patient owes the difference. An upcoding signal is also open on this case — clear it before seating.",
+    basedOn: "Delta Dental coverage policy, fee schedule, fraud integrity check",
+    queue: "Patient 3 of 5 · tooth #8",
+  },
+];
+
+const READY: QueuePatient[] = [
   {
     id: "PRED-SIM-DA-U01",
     name: "Robert Thompson",
+    dot: BRAND_GREEN,
     payer: "Delta Dental PPO",
-    procedure: "Prophylaxis · adult cleaning",
-    dotColor: BRAND_GREEN,
-    status: "ready",
-    finding: "Coverage clean · patient pays $0",
+    info: "Adult prophylaxis",
+    status: "READY",
+    finding: "Coverage clean · no issues · patient pays $0",
+    insight: "No action needed. Patient can check in.",
+    basedOn: "eligibility response, coverage rules",
+    queue: "Patient 4 of 5",
   },
   {
     id: "PRED-SIM-DA-U02",
     name: "Maria Santos",
+    dot: BRAND_GREEN,
     payer: "Delta Dental PPO",
-    procedure: "Bitewings · 4 films",
-    dotColor: BRAND_GREEN,
-    status: "ready",
-    finding: "Coverage clean · patient pays $0",
+    info: "4 bitewing films",
+    status: "READY",
+    finding: "Coverage clean · 100% covered · patient pays $0",
+    insight: "No action needed. Patient can check in.",
+    basedOn: "eligibility response, coverage rules",
+    queue: "Patient 5 of 5",
   },
 ];
 
-function Skeleton() {
-  return (
-    <div className="animate-pulse space-y-4">
-      <div className="h-20 rounded-xl bg-gray-100" />
-      <div className="h-14 rounded-xl bg-gray-100" />
-      <div className="h-40 rounded-xl bg-gray-100" />
-    </div>
-  );
+// ── Tab 2 ────────────────────────────────────────────────────────────
+
+type Pill = "Passed" | "Review" | "Blocked" | "Pending" | "Skipped";
+type Status = "Approved" | "Pended" | "Denied";
+
+interface PreDRow {
+  id: string;
+  name: string;
+  tooth: string;
+  payer: string;
+  status: Status;
+  waves: [Pill, Pill, Pill, Pill, Pill];
 }
 
-function CountCell({
-  value,
+/**
+ * Ten pre-Ds, every field measured.
+ *
+ * Note what the pills say and the brief did not: NO ROW IS CLEAN
+ * ACROSS ALL FIVE WAVES, including the approved ones. Almost every
+ * case carries ELIG_FREQUENCY_UNVERIFIED — the engine could not
+ * confirm frequency limits because no prior treatment date is on file
+ * — and that is a recommend-with-an-action, so it reads Review. An
+ * "approved" pre-D with five green ticks would be a nicer screenshot
+ * and a false one.
+ */
+const ALL_PREDS: PreDRow[] = [
+  { id: "PRED-SIM-DA-A01", name: "James Mitchell", tooth: "#19", payer: "Delta Dental PPO", status: "Pended", waves: ["Review", "Review", "Review", "Review", "Review"] },
+  { id: "PRED-SIM-DA-B04", name: "Carlos Rivera", tooth: "#19", payer: "Delta Dental PPO", status: "Pended", waves: ["Review", "Review", "Review", "Review", "Review"] },
+  { id: "PRED-SIM-DA-D04", name: "Linda Taylor", tooth: "#8", payer: "Delta Dental PPO", status: "Approved", waves: ["Blocked", "Review", "Passed", "Blocked", "Passed"] },
+  { id: "PRED-SIM-DA-U01", name: "Robert Thompson", tooth: "—", payer: "Delta Dental PPO", status: "Approved", waves: ["Review", "Review", "Passed", "Review", "Passed"] },
+  { id: "PRED-SIM-DA-U02", name: "Maria Santos", tooth: "—", payer: "Delta Dental PPO", status: "Approved", waves: ["Review", "Review", "Review", "Review", "Passed"] },
+  { id: "PRED-SIM-DA-B01", name: "Patricia Johnson", tooth: "#14", payer: "Delta Dental PPO", status: "Denied", waves: ["Blocked", "Review", "Review", "Review", "Review"] },
+  { id: "PRED-SIM-DA-C01", name: "Robert Kim", tooth: "#19", payer: "Delta Dental PPO", status: "Pended", waves: ["Review", "Review", "Review", "Review", "Review"] },
+  { id: "PRED-SIM-DA-A02", name: "Sandra Williams", tooth: "#3", payer: "Delta Dental PPO", status: "Approved", waves: ["Review", "Passed", "Passed", "Review", "Passed"] },
+  { id: "PRED-SIM-DA-U03", name: "Kevin Lee", tooth: "#14", payer: "Cigna DPPO", status: "Approved", waves: ["Passed", "Review", "Review", "Review", "Passed"] },
+  { id: "PRED-SIM-DA-A04", name: "Maria Rodriguez", tooth: "—", payer: "Delta Dental PPO", status: "Approved", waves: ["Review", "Review", "Passed", "Review", "Passed"] },
+];
+
+/** Suwanee's own totals, from pred_states. The deployment has 50
+ *  across three practices; this practice can reach 40. */
+const TOTALS = { total: 40, Approved: 13, Pended: 20, Denied: 7 };
+
+const PILL_CLS: Record<Pill, string> = {
+  Passed: "bg-green-100 text-green-800",
+  Review: "bg-amber-100 text-amber-800",
+  Blocked: "bg-red-100 text-red-800",
+  Pending: "bg-gray-100 text-gray-400",
+  Skipped: "bg-gray-100 text-gray-300",
+};
+
+const PILL_TEXT: Record<Pill, string> = {
+  Passed: "Passed",
+  Review: "Review",
+  Blocked: "Blocked",
+  Pending: "·",
+  Skipped: "—",
+};
+
+const STATUS_CLS: Record<Status, string> = {
+  Approved: "bg-green-100 text-green-800",
+  Pended: "bg-amber-100 text-amber-800",
+  Denied: "bg-red-100 text-red-800",
+};
+
+const WAVE_COLS = ["Verify", "Coverage", "Clinical", "Docs", "Decision"];
+
+// ── Shared bits ──────────────────────────────────────────────────────
+
+function StatCard({
   label,
+  value,
   tone,
+  active,
+  onClick,
 }: {
-  value: number;
   label: string;
+  value: number;
   tone: string;
+  active?: boolean;
+  onClick?: () => void;
 }) {
-  return (
-    <div>
-      <p className="text-[20px] font-semibold leading-none" style={{ color: tone }}>
-        {value}
-      </p>
-      <p className="mt-1 text-[10px] uppercase tracking-wide text-gray-500">
+  const body = (
+    <>
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
         {label}
       </p>
-    </div>
+      <p className={`mt-1 text-3xl font-semibold ${tone}`}>{value}</p>
+    </>
+  );
+  const cls = `rounded-xl border bg-white p-4 text-left ${
+    active ? "border-accord-green-500 ring-1 ring-accord-green-500/30" : "border-gray-200"
+  }`;
+  return onClick ? (
+    <button type="button" onClick={onClick} aria-pressed={active} className={`${cls} transition hover:border-gray-300`}>
+      {body}
+    </button>
+  ) : (
+    <div className={cls}>{body}</div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function firstNameOf(full: string): string {
+  return full.replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "").split(/\s+/)[0] ?? "";
+}
+
+// ── Page ─────────────────────────────────────────────────────────────
+
+export default function CoverageIntelligence() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const demoLink = useDemoLink();
+  const { effectiveUser, role } = useAuth();
+
+  const isAll = pathname.startsWith("/coverage/all");
+
+  const [docsFor, setDocsFor] = useState<string | null>(null);
+  const [toast, setToast] = useState("");
+  const [filter, setFilter] = useState<Status | null>(null);
+  const [query, setQuery] = useState("");
+
+  function sendDocs(name: string) {
+    setDocsFor(null);
+    setToast(`Document request queued for ${name} ✓`);
+    window.setTimeout(() => setToast(""), 3000);
+  }
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return ALL_PREDS.filter(
+      (r) =>
+        (!filter || r.status === filter) &&
+        (!q ||
+          r.name.toLowerCase().includes(q) ||
+          r.id.toLowerCase().includes(q)),
+    );
+  }, [filter, query]);
+
+  const firstName = firstNameOf(effectiveUser?.name ?? "");
+  const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
+  const roleLabel = (role ?? "").replace(/_/g, " ");
+
+  const tabCls = (active: boolean) =>
+    `-mb-px border-b-2 px-1 py-2.5 text-[13px] font-medium transition ${
+      active
+        ? "border-accord-green-900 text-accord-green-900"
+        : "border-transparent text-slate-500 hover:text-slate-800"
+    }`;
+
   return (
-    <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-2.5">
-      <p className="text-[10px] uppercase tracking-wide text-gray-500">{label}</p>
-      <p className="mt-1 truncate text-[15px] font-semibold text-gray-900">
-        {value}
-      </p>
+    <div>
+      {/* ── Sub-tabs ───────────────────────────────────────────── */}
+      <nav className="flex gap-5 border-b border-slate-200 bg-white px-5 sm:px-6">
+        <NavLink to={demoLink("/coverage")} end className={() => tabCls(!isAll)}>
+          My patients today
+        </NavLink>
+        <NavLink to={demoLink("/coverage/all")} className={() => tabCls(isAll)}>
+          All pre-Ds
+        </NavLink>
+      </nav>
+
+      {!isAll ? (
+        /* ── Tab 1 ──────────────────────────────────────────── */
+        <div className="mx-auto max-w-4xl px-5 py-6 sm:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="text-[22px] font-semibold text-gray-900">
+                Good morning{firstName ? `, ${firstName}` : ""}
+              </h1>
+              <p className="mt-0.5 text-[13px] capitalize text-slate-500">
+                {roleLabel}
+                {roleLabel && " · "}
+                <span className="normal-case">{tenantName}</span>
+              </p>
+            </div>
+            <span className="rounded-full bg-amber-50 px-3 py-1 text-[12px] font-semibold text-amber-700">
+              {ACTION.length} need action
+            </span>
+          </div>
+
+          <div className="mt-5 grid grid-cols-3 gap-3">
+            <StatCard label="Need my action" value={ACTION.length} tone="text-red-600" />
+            <StatCard label="Ready" value={READY.length} tone="text-green-600" />
+            {/* Zero because none of the five is waiting on a document —
+                counted from the queue, not asserted. */}
+            <StatCard label="Missing docs" value={0} tone="text-amber-600" />
+          </div>
+
+          <Section title={`Need my action (${ACTION.length})`}>
+            {ACTION.map((p) => (
+              <PatientCard
+                key={p.id}
+                patient={p}
+                onCheckIn={() => navigate(demoLink(`/coverage/${p.id}`))}
+                onRequestDocs={() => setDocsFor(p.name)}
+              />
+            ))}
+          </Section>
+
+          <Section title={`Ready to check in (${READY.length})`}>
+            {READY.map((p) => (
+              <PatientCard
+                key={p.id}
+                patient={p}
+                onCheckIn={() => navigate(demoLink(`/coverage/${p.id}`))}
+                onRequestDocs={() => setDocsFor(p.name)}
+              />
+            ))}
+          </Section>
+
+          <p className="mt-5 text-[11px] leading-relaxed text-gray-400">
+            Five patients, read from the API on 7 Aug 2026. There is no patient
+            directory endpoint yet, so this list does not refresh — each
+            patient&rsquo;s coverage does.
+          </p>
+        </div>
+      ) : (
+        /* ── Tab 2 ──────────────────────────────────────────── */
+        <div className="mx-auto max-w-7xl px-5 py-6 sm:px-6">
+          <h1 className="text-[22px] font-semibold text-gray-900">All pre-Ds</h1>
+          <p className="mt-0.5 text-[13px] text-slate-500">
+            {TOTALS.total} pre-Ds at {tenantName} across 5 decision waves
+          </p>
+
+          <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              label="Total"
+              value={TOTALS.total}
+              tone="text-slate-900"
+              active={filter === null}
+              onClick={() => setFilter(null)}
+            />
+            {(["Approved", "Pended", "Denied"] as const).map((s) => (
+              <StatCard
+                key={s}
+                label={s}
+                value={TOTALS[s]}
+                tone={
+                  s === "Approved"
+                    ? "text-green-600"
+                    : s === "Pended"
+                      ? "text-amber-600"
+                      : "text-red-600"
+                }
+                active={filter === s}
+                onClick={() => setFilter((f) => (f === s ? null : s))}
+              />
+            ))}
+          </div>
+
+          <div className="relative mt-4">
+            <Search
+              size={14}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search patient name or pre-D ID..."
+              aria-label="Search patient name or pre-D ID"
+              className="w-full max-w-sm rounded-lg border border-gray-300 py-2 pl-8 pr-3 text-[13px] text-gray-900 placeholder-gray-400 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500"
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+            <span className="mr-1">Wave key:</span>
+            {(["Passed", "Review", "Blocked", "Pending", "Skipped"] as Pill[]).map(
+              (p) => (
+                <span
+                  key={p}
+                  className={`rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${PILL_CLS[p]}`}
+                >
+                  {p}
+                </span>
+              ),
+            )}
+          </div>
+
+          <div className="mt-3 overflow-x-auto rounded-xl border border-gray-200 bg-white">
+            <table className="w-full min-w-[980px] text-left">
+              <thead className="border-b border-gray-200 bg-slate-50">
+                <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="px-4 py-2.5">Patient</th>
+                  <th className="px-2 py-2.5">Tooth</th>
+                  <th className="px-2 py-2.5">Payer</th>
+                  <th className="px-2 py-2.5">Status</th>
+                  {WAVE_COLS.map((c) => (
+                    <th key={c} className="px-2 py-2.5">
+                      {c}
+                    </th>
+                  ))}
+                  <th className="px-4 py-2.5" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((r) => (
+                  <tr key={r.id} className="hover:bg-accord-green-50/40">
+                    <td className="px-4 py-2.5">
+                      <span className="block text-[13px] font-medium text-slate-800">
+                        {r.name}
+                      </span>
+                      <span className="block font-mono text-xs text-slate-400">
+                        {r.id}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2.5 text-[12.5px] text-slate-600">
+                      {r.tooth}
+                    </td>
+                    <td className="px-2 py-2.5 text-[12.5px] text-slate-600">
+                      {r.payer}
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_CLS[r.status]}`}
+                      >
+                        {r.status}
+                      </span>
+                    </td>
+                    {r.waves.map((w, i) => (
+                      <td key={WAVE_COLS[i]} className="px-2 py-2.5">
+                        <span
+                          className={`inline-block min-w-[54px] rounded-full px-2 py-0.5 text-center text-[10.5px] font-semibold ${PILL_CLS[w]}`}
+                        >
+                          {PILL_TEXT[w]}
+                        </span>
+                      </td>
+                    ))}
+                    <td className="px-4 py-2.5">
+                      <div className="flex justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => navigate(demoLink(`/workbench/${r.id}`))}
+                          className="rounded-lg border border-gray-300 px-2.5 py-1 text-[11.5px] font-medium text-gray-700 transition hover:bg-gray-50"
+                        >
+                          Review
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDocsFor(r.name)}
+                          className="rounded-lg border border-gray-300 px-2.5 py-1 text-[11.5px] font-medium text-gray-700 transition hover:bg-gray-50"
+                        >
+                          Request docs
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={10}
+                      className="px-4 py-8 text-center text-[12.5px] text-slate-500"
+                    >
+                      No pre-D matches that filter.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="mt-3 text-[11px] leading-relaxed text-gray-400">
+            Ten of {TOTALS.total} shown — names, decisions, teeth and wave
+            states read from the database on 7 Aug 2026. There is no list
+            endpoint, so the remaining {TOTALS.total - ALL_PREDS.length} are not
+            loaded rather than hidden. The counts above are this
+            practice&rsquo;s; the deployment holds 50 across three.
+          </p>
+        </div>
+      )}
+
+      {docsFor && (
+        <RequestDocsModal
+          patientName={docsFor}
+          onClose={() => setDocsFor(null)}
+          onSend={() => sendDocs(docsFor)}
+        />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-[76px] left-1/2 z-50 -translate-x-1/2 rounded-lg bg-slate-900 px-4 py-2.5 text-[12.5px] font-medium text-white shadow-lg lg:bottom-6"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
 
-function QueueRow({
-  patient,
-  selected,
-  checkedIn,
-  onSelect,
-  onCheckIn,
-  onPrint,
+function Section({
+  title,
+  children,
 }: {
-  patient: Patient;
-  selected: boolean;
-  checkedIn: boolean;
-  onSelect: () => void;
-  onCheckIn: () => void;
-  onPrint: () => void;
+  title: string;
+  children: React.ReactNode;
 }) {
   return (
-    <div
-      className="border-b border-gray-100"
-      style={{
-        backgroundColor: selected ? "#f0f7f2" : undefined,
-        borderLeft: selected
-          ? `2px solid ${BRAND_GREEN}`
-          : "2px solid transparent",
-      }}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={selected ? "true" : undefined}
-        className="block w-full px-3 pt-2.5 text-left"
-      >
-        <span className="flex items-start gap-2">
+    <section className="mt-6">
+      <h2 className="mb-3 text-sm font-semibold capitalize text-slate-700">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function PatientCard({
+  patient,
+  onCheckIn,
+  onRequestDocs,
+}: {
+  patient: QueuePatient;
+  onCheckIn: () => void;
+  onRequestDocs: () => void;
+}) {
+  return (
+    <article className="mb-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
           <span
             aria-hidden="true"
-            className="mt-[5px] h-2 w-2 flex-shrink-0 rounded-full"
-            style={{ backgroundColor: patient.dotColor }}
+            className="h-2 w-2 flex-shrink-0 rounded-full"
+            style={{ backgroundColor: patient.dot }}
           />
-          <span className="min-w-0 flex-1">
-            <span className="flex items-baseline justify-between gap-2">
-              <span className="truncate text-[13.5px] font-medium text-gray-900">
-                {patient.name}
-              </span>
-              {checkedIn && (
-                <span className="flex-shrink-0 text-[10px] font-semibold text-accord-green-700">
-                  Checked in ✓
-                </span>
-              )}
-            </span>
-            <span className="mt-0.5 block truncate text-[11.5px] text-gray-500">
-              {patient.payer} · {patient.procedure}
-            </span>
-            <span className="mt-1 block text-[11px] leading-snug text-gray-400">
-              {patient.finding}
-            </span>
+          <span className="font-medium text-slate-800">{patient.name}</span>
+          <span className="text-[12.5px] text-slate-500">
+            {patient.payer} · {patient.info}
           </span>
+        </div>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10.5px] font-bold ${
+            patient.status === "READY"
+              ? "bg-green-100 text-green-800"
+              : "bg-amber-100 text-amber-800"
+          }`}
+        >
+          {patient.status}
         </span>
-      </button>
+      </div>
 
-      <div className="flex gap-1.5 px-3 pb-2.5 pl-[22px] pt-1.5">
+      <p className="mt-2 text-sm text-slate-700">
+        <span className="font-medium">Key finding:</span> {patient.finding}
+      </p>
+      {/* Green, and labelled "AI insight", because it is the one line on
+          this card the engine did NOT produce — it is a reading of the
+          findings, not a signal. Keeping it visually distinct is what
+          stops it being quoted back as policy. */}
+      <p className="mt-1 text-sm" style={{ color: BRAND_GREEN }}>
+        <span className="font-medium">AI insight:</span> {patient.insight}
+      </p>
+      <p className="mt-1 text-sm text-slate-500">
+        <span className="font-medium">Based on:</span> {patient.basedOn}
+      </p>
+      <p className="mt-1 text-sm text-slate-400">In queue: {patient.queue}</p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           onClick={onCheckIn}
-          disabled={checkedIn}
-          className="rounded px-2 py-1 text-[11px] font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
+          className="rounded-lg px-4 py-1.5 text-sm font-semibold text-white transition hover:opacity-90"
           style={{ backgroundColor: BRAND_GREEN }}
         >
-          {checkedIn ? "Checked in" : "Check-in"}
+          Check-in
         </button>
         <button
           type="button"
-          onClick={onPrint}
-          className="rounded border border-gray-300 px-2 py-1 text-[11px] font-medium text-gray-600 transition hover:bg-gray-50"
+          onClick={onRequestDocs}
+          className="rounded-lg border border-gray-300 px-4 py-1.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
         >
-          Print
+          Request docs
         </button>
       </div>
-    </div>
-  );
-}
-
-export default function CoverageIntelligence() {
-  const { isDemo, demoPredId } = useDemo();
-  const { effectiveUser } = useAuth();
-
-  const [selected, setSelected] = useState<string>(
-    // Demo mode lands on whichever case the link named; otherwise the
-    // reference implant case.
-    isDemo && PATIENTS.some((p) => p.id === demoPredId)
-      ? demoPredId
-      : PATIENTS[0].id,
-  );
-  const [showDetail, setShowDetail] = useState(false);
-  const [checkedIn, setCheckedIn] = useState<Set<string>>(new Set());
-  // A row's Print has to select the patient first and print once their
-  // coverage has actually arrived — printing the previous patient's
-  // sheet is the failure this avoids.
-  const [pendingPrint, setPendingPrint] = useState<string | null>(null);
-
-  const { data, isLoading, isError, error, refetch } =
-    usePatientSummary(selected);
-
-  useEffect(() => {
-    if (pendingPrint && data?.pred_request_id === pendingPrint) {
-      setPendingPrint(null);
-      window.print();
-    }
-  }, [pendingPrint, data]);
-
-  const action = PATIENTS.filter((p) => p.status === "action");
-  const ready = PATIENTS.filter((p) => p.status === "ready");
-  const firstName = (effectiveUser?.name ?? "").replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "").split(" ")[0];
-  const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
-
-  function select(id: string) {
-    setSelected(id);
-    setShowDetail(true);
-  }
-
-  function markCheckedIn(id: string) {
-    // Local only. There is no check-in endpoint; saying "checked in"
-    // and meaning "this browser tab remembers" is the honest limit.
-    setCheckedIn((prev) => new Set(prev).add(id));
-  }
-
-  function printRow(id: string) {
-    select(id);
-    setPendingPrint(id);
-  }
-
-  return (
-    <div className="md:flex md:h-[calc(100dvh-49px)] md:overflow-hidden">
-      {/* ── Left: today's patients ───────────────────────────── */}
-      <aside
-        className={`border-gray-200 md:w-64 md:flex-shrink-0 md:overflow-y-auto md:border-r xl:w-72 ${
-          showDetail ? "hidden md:block" : "block"
-        }`}
-      >
-        <div className="border-b border-gray-200 px-3 py-3.5">
-          <p className="text-[14px] font-semibold text-gray-900">
-            Good morning{firstName ? `, ${firstName}` : ""}
-          </p>
-          <p className="mt-0.5 text-[12px] text-gray-500">
-            {tenantName} · {PATIENTS.length} patients
-          </p>
-
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <CountCell value={action.length} label="Action" tone="#C62828" />
-            <CountCell value={ready.length} label="Ready" tone={BRAND_GREEN} />
-            {/* Zero because none of the five is waiting on a document.
-                Counted from the queue, not asserted. */}
-            <CountCell value={0} label="Missing docs" tone={BRAND_AMBER} />
-          </div>
-        </div>
-
-        <p className="px-3 pb-1 pt-3 text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400">
-          Need my action
-        </p>
-        {action.map((p) => (
-          <QueueRow
-            key={p.id}
-            patient={p}
-            selected={p.id === selected}
-            checkedIn={checkedIn.has(p.id)}
-            onSelect={() => select(p.id)}
-            onCheckIn={() => markCheckedIn(p.id)}
-            onPrint={() => printRow(p.id)}
-          />
-        ))}
-
-        <div className="my-2 border-t border-gray-200" />
-
-        <p className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400">
-          Ready to check in
-        </p>
-        {ready.map((p) => (
-          <QueueRow
-            key={p.id}
-            patient={p}
-            selected={p.id === selected}
-            checkedIn={checkedIn.has(p.id)}
-            onSelect={() => select(p.id)}
-            onCheckIn={() => markCheckedIn(p.id)}
-            onPrint={() => printRow(p.id)}
-          />
-        ))}
-
-        <p className="px-3 py-4 text-[11px] leading-relaxed text-gray-400">
-          Five patients, read from the API on 7 Aug 2026. There is no patient
-          directory endpoint yet, so this list does not refresh — the panel on
-          the right does.
-        </p>
-      </aside>
-
-      {/* ── Right: what the plan pays ────────────────────────── */}
-      <section
-        className={`min-w-0 flex-1 flex-col md:flex ${
-          showDetail ? "flex" : "hidden"
-        }`}
-      >
-        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-          <button
-            type="button"
-            onClick={() => setShowDetail(false)}
-            className="mb-3 inline-flex min-h-[36px] items-center gap-1.5 text-[12.5px] font-medium text-gray-500 hover:text-gray-900 md:hidden"
-          >
-            <ArrowLeft size={14} />
-            Patients
-          </button>
-
-          {isLoading && <Skeleton />}
-
-          {isError && (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-5">
-              <p className="text-[13.5px] font-medium text-red-700">
-                Could not load coverage data.
-              </p>
-              <p className="mt-1 text-[12.5px] text-red-600">
-                {error instanceof Error ? error.message : "Unknown error"}
-              </p>
-              <button
-                type="button"
-                onClick={() => void refetch()}
-                className="mt-3 rounded-lg border border-red-300 px-3 py-1.5 text-[12.5px] font-medium text-red-700 transition hover:bg-red-100"
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {data && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="text-[19px] font-semibold text-gray-900 sm:text-xl">
-                    {data.patient_name}
-                  </h2>
-                  <p className="mt-0.5 text-[12.5px] text-gray-500">
-                    {data.plan_name} · {data.provider_name} · {data.state}
-                  </p>
-                </div>
-                {checkedIn.has(selected) && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-accord-green-50 px-2.5 py-1 text-[11.5px] font-semibold text-accord-green-700">
-                    <Check size={12} strokeWidth={3} />
-                    Checked in
-                  </span>
-                )}
-              </div>
-
-              {/* Four numbers a front desk is asked for by name. Read
-                  from the payload — the deductible is $50 remaining on
-                  these plans, not met. */}
-              <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-                <StatCard
-                  label="Annual max remaining"
-                  value={formatCurrency(data.annual_max_remaining_before)}
-                />
-                <StatCard
-                  label="Deductible remaining"
-                  value={formatCurrency(data.deductible_remaining_before)}
-                />
-                <StatCard label="Payer" value={data.plan_name} />
-                <StatCard
-                  label="After this case"
-                  value={formatCurrency(data.summary.annual_max_remaining_after)}
-                />
-              </div>
-
-              <CoverageCard summary={data} />
-
-              <DowngradeAlert procedures={data.procedures} />
-
-              <AnnualMaxBar
-                thisCase={data.summary.total_insurance_pays}
-                remainingAfter={data.summary.annual_max_remaining_after}
-                exhausted={data.summary.annual_max_exhausted}
-              />
-
-              <CostTable procedures={data.procedures} summary={data.summary} />
-
-              {data.notes.length > 0 && (
-                <ul className="space-y-1.5 rounded-xl border border-gray-200 bg-white p-4">
-                  {data.notes.map((n) => (
-                    <li key={n} className="text-[12.5px] text-gray-600">
-                      {n}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {data.caveats.length > 0 && (
-                <ul className="space-y-1 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  {data.caveats.map((c) => (
-                    <li key={c} className="text-[11.5px] text-gray-500">
-                      {c}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              <BenefitSummary patient={data} />
-
-              <PayerComparison />
-            </div>
-          )}
-        </div>
-
-        {/* ── Actions ────────────────────────────────────────── */}
-        <footer className="border-t border-gray-200 bg-white px-4 py-2.5 sm:px-5">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              disabled={!data}
-              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg px-3.5 text-[12.5px] font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
-              style={{ backgroundColor: BRAND_GREEN }}
-            >
-              <Printer size={13} />
-              Print patient summary
-            </button>
-            <button
-              type="button"
-              disabled={!data}
-              title="Demo only — there is no mail path from the browser"
-              className="min-h-[36px] rounded-lg border border-gray-300 px-3.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
-            >
-              Email to patient
-            </button>
-            <button
-              type="button"
-              onClick={() => markCheckedIn(selected)}
-              disabled={checkedIn.has(selected)}
-              className="min-h-[36px] rounded-lg border border-gray-300 px-3.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
-            >
-              {checkedIn.has(selected) ? "Checked in ✓" : "Mark checked in"}
-            </button>
-            <span className="ml-auto self-center text-[10.5px] text-gray-400">
-              Check-in is remembered in this tab only
-            </span>
-          </div>
-        </footer>
-      </section>
-    </div>
+    </article>
   );
 }
