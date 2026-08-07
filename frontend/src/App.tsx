@@ -39,9 +39,7 @@ const WorkbenchDetail = lazy(
 const CoverageIntelligence = lazy(
   () => import("./pages/app/coverage/CoverageIntelligence"),
 );
-const CheckIn = lazy(
-  () => import("./pages/app/coverage/CoverageIntelligence"),
-);
+const CheckIn = lazy(() => import("./pages/app/checkin/CheckIn"));
 const CoverageDetail = lazy(
   () => import("./pages/app/coverage/CoverageDetail"),
 );
