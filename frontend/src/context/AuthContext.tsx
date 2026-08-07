@@ -47,6 +47,20 @@ interface AuthState {
   tenantId: string | null;
   isDemo: boolean;
   isAuthenticated: boolean;
+  /**
+   * True until the provider's first effect has run.
+   *
+   * ProtectedRoute renders nothing while this is true, so a guard never
+   * decides "not signed in" against state that has not settled.
+   *
+   * ⚠ Today nothing here is actually async: the stored session is read
+   * synchronously by useState's initializer, and demo mode is derived
+   * from the URL in a useMemo. So this flag is true for exactly one
+   * committed render and then false forever. It is a seam for the real
+   * asynchronous check — a token exchange, a /me call — not a fix for
+   * a race that currently exists.
+   */
+  isLoading: boolean;
   signIn: (role: Role, tenantId: string) => void;
   signOut: () => void;
 }
@@ -75,6 +89,7 @@ function readStored(): StoredSession | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { isDemo, demoTenant } = useDemo();
   const [session, setSession] = useState<StoredSession | null>(readStored);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (session) {
@@ -82,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       window.localStorage.removeItem(STORAGE_KEY);
     }
+    setIsLoading(false);
   }, [session]);
 
   const signIn = useCallback((role: Role, tenantId: string) => {
@@ -100,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         tenantId: demoTenant,
         isDemo: true,
         isAuthenticated: true,
+        isLoading,
         signIn,
         signOut,
       };
@@ -109,10 +126,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       tenantId: session?.tenantId ?? null,
       isDemo: false,
       isAuthenticated: Boolean(session),
+      isLoading,
       signIn,
       signOut,
     };
-  }, [isDemo, demoTenant, session, signIn, signOut]);
+  }, [isDemo, demoTenant, session, isLoading, signIn, signOut]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
