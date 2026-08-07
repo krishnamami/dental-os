@@ -73,28 +73,38 @@ export default function AppShell() {
       <DemoBanner />
 
       <header className="sticky top-0 z-30 flex min-h-[52px] items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-2 sm:px-6">
+        {/* Everything here is near-black on white. The previous
+            slate-400/500 greys were ~2.8:1 against white — under the
+            4.5:1 WCAG AA floor for text this size, and the tenant name
+            at 10px was the worst of them. A practice name and the
+            identity you are signed in as are not decoration; on a
+            surgery monitor at an angle they were genuinely unreadable. */}
         <Link to={demoLink("/")} className="flex min-w-0 flex-col">
           <AccordLogo size={24} />
-          <span className="mt-0.5 truncate text-[10px] text-slate-400">
+          <span className="mt-0.5 truncate text-[12px] text-[#111111]">
             {tenantName}
           </span>
         </Link>
 
         <div className="flex flex-shrink-0 items-center gap-2">
-          <span className="hidden text-sm text-slate-500 sm:inline">
-            {effectiveUser?.name}
-            {role ? ` · ${ROLE_LABELS[role]}` : ""}
+          <span className="hidden text-sm sm:inline">
+            <span className="font-medium text-[#111111]">
+              {effectiveUser?.name}
+            </span>
+            {role ? (
+              <span className="text-[#374151]"> · {ROLE_LABELS[role]}</span>
+            ) : null}
           </span>
           {!isDemo && (
             <button
               type="button"
               onClick={signOutAndLeave}
-              className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-500 transition hover:bg-slate-50"
+              className="rounded-lg border border-[#d1d5db] bg-white px-3 py-1 text-sm text-[#111111] transition hover:bg-slate-50"
             >
               Sign out
             </button>
           )}
-          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-semibold text-green-700">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#dcfce7] text-[11px] font-semibold text-[#15803d]">
             {initials(effectiveUser?.name ?? "?")}
           </span>
         </div>

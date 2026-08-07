@@ -62,13 +62,17 @@ const ORIG_KEY = "accord_dental_orig_token";
  * moves route this table does not change, and a role's permissions
  * cannot silently follow a URL rename.
  *
- * Note what front desk LOST here: `workbench`. Reading a full pre-D —
- * every persona's finding on a patient's clinical case — was never
- * part of checking someone in. Narrowing it is the point of splitting
- * the roles.
+ * Note what front desk LOST here: `workbench`, and now
+ * `patient_financial` too. Reading a full pre-D — every persona's
+ * finding on a patient's clinical case — was never part of checking
+ * someone in, and neither is the money conversation: the desk sees
+ * today's estimate on the check-in card, the coordinator has the
+ * discussion about it. Narrowing this is the point of splitting the
+ * roles, and ROLE_NAV already said so — the desk had no link to
+ * /coverage but could still reach it by URL, which is what this fixes.
  */
 const ROLE_PRODUCTS: Record<Role, string[]> = {
-  front_desk: ["checkin", "patient_financial"],
+  front_desk: ["checkin"],
   tx_coord: ["checkin", "patient_financial", "workbench"],
   revenue_ops: ["workbench", "revenue_ops", "patient_financial"],
   dentist: [
@@ -78,7 +82,12 @@ const ROLE_PRODUCTS: Record<Role, string[]> = {
     "revenue_ops",
     "portfolio",
   ],
-  dso_owner: ["portfolio", "revenue_ops", "workbench"],
+  // `tenant_admin` is the practice's OWN administration — staff,
+  // settings, and the overlay rules the practice controls. It is not
+  // `admin`, which is the Accord platform console: one owner manages
+  // one practice, and the API enforces that independently (see
+  // require_practice_admin in dental-os).
+  dso_owner: ["portfolio", "revenue_ops", "workbench", "tenant_admin"],
   accord_admin: [
     "checkin",
     "patient_financial",
@@ -112,7 +121,12 @@ const ROLE_NAV: Record<Role, string[]> = {
     "Revenue Ops",
     "Portfolio",
   ],
-  dso_owner: ["Portfolio", "Revenue Ops", "Pre-D Workbench"],
+  dso_owner: [
+    "Portfolio",
+    "Revenue Ops",
+    "Pre-D Workbench",
+    "Practice admin",
+  ],
   accord_admin: [
     "Check-In",
     "Patient Financial",

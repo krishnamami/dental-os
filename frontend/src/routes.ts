@@ -8,6 +8,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
+  Building2,
   ClipboardCheck,
   Microscope,
   Receipt,
@@ -72,6 +73,15 @@ export const WORKFLOW_NAV: NavItem[] = [
     icon: BarChart3,
     gate: "Portfolio",
   },
+  // A practice owner administering their OWN practice. Distinct from
+  // "Administration" above, which is the Accord platform console — the
+  // two are different jobs, different gates, and different APIs.
+  {
+    label: "Practice admin",
+    to: "/admin/tenant",
+    icon: Building2,
+    gate: "Practice admin",
+  },
   { label: "Administration", to: "/admin", icon: Settings, gate: "Admin" },
 ];
 
@@ -91,6 +101,7 @@ export const TITLE_FOR_PATH: Array<[string, string]> = [
   ["/dso/revenue", "Revenue"],
   ["/dso/training", "Training"],
   ["/dso", "Portfolio intelligence"],
+  ["/admin/tenant", "Practice administration"],
   ["/admin/onboard", "Onboard tenant"],
   ["/admin/catalogue", "Catalogue"],
   ["/admin/health", "System health"],

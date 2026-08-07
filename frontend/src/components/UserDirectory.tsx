@@ -1,10 +1,12 @@
 /**
  * H-12 — the user directory, with "view as".
  *
- * Reads GET /api/auth/users, which is accord_admin-only server-side.
- * That 403 is the real gate; this component only ever renders inside
- * the admin console, so a non-admin should never reach it — but if the
- * route guard is ever loosened, the API still says no.
+ * Reads GET /api/auth/users. Server-side that route now answers an
+ * accord_admin OR a practice owner — but a practice owner only ever
+ * gets their own tenant back, whatever tenant_id they send, so this
+ * component's cross-tenant grouping stays an Accord-only view in
+ * practice. That 403 is still the real gate; the route guard around the
+ * admin console is only usability.
  *
  * Impersonation swaps the stored token for one the server minted for
  * the target user, stamped with `impersonated_by`. The admin's own

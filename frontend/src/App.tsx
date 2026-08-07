@@ -52,6 +52,7 @@ const ClinicalEvidence = lazy(
 const RevenueOps = lazy(() => import("./pages/app/revenue-ops/RevenueOps"));
 const DSOIntelligence = lazy(() => import("./pages/app/dso/DSOIntelligence"));
 const AdminConsole = lazy(() => import("./pages/app/admin/AdminConsole"));
+const TenantAdmin = lazy(() => import("./pages/app/admin/TenantAdmin"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 /**
@@ -167,6 +168,17 @@ export default function App() {
               <Route path="/dso/denials" element={<DSOIntelligence />} />
               <Route path="/dso/revenue" element={<DSOIntelligence />} />
               <Route path="/dso/training" element={<DSOIntelligence />} />
+            </Route>
+
+            {/* ⚠ /admin/tenant is NOT part of the accord_admin branch
+                below, despite the path. It is a practice owner
+                administering their own practice; the Accord console at
+                /admin is a different job with a different gate. The
+                shared prefix is cosmetic — React Router matches the
+                full path, so the accord_admin-only guard further down
+                never sees this route. */}
+            <Route element={<ProductRoute product="tenant_admin" />}>
+              <Route path="/admin/tenant" element={<TenantAdmin />} />
             </Route>
           </Route>
         </Route>

@@ -33,6 +33,7 @@ from api.auth import (
     assert_tenant_allowed,
     require_admin,
     require_claims_or_demo,
+    require_practice_admin,
     tenant_filter,
 )
 
@@ -1348,4 +1349,141 @@ async def check_in_patient(
         "pred_request_id": body.pred_request_id,
         "patient_name": body.patient_name,
         "checked_in_at": rows[0]["checked_in_at"].isoformat() if rows else None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Practice administration — what a dso_owner may see about their OWN
+# practice. Both routes take the tenant from the CLAIMS, never from the
+# query string, for the reason spelled out on require_practice_admin.
+# ─────────────────────────────────────────────────────────────────────
+
+def _tenant_for_admin(claims: dict, tenant_id: str | None) -> str:
+    """The tenant these routes will answer about.
+
+    accord_admin may name one (and must, having none of their own); a
+    practice owner gets theirs regardless of what they asked for.
+    """
+    own = tenant_filter(claims)
+    if own:
+        return own
+    if not tenant_id:
+        raise HTTPException(422, "tenant_id is required for accord_admin")
+    return tenant_id
+
+
+@router.get("/admin/overlays")
+async def list_overlays(
+    request: Request,
+    tenant_id: str | None = None,
+    claims=Depends(require_practice_admin),
+) -> list[dict]:
+    """The practice's own coverage rules — catalogue layer 3.
+
+    These are the rules that WIN over the payer's: `rule_overrides` is
+    applied last (rule_loader.LAYER_OVERLAY), so a practice owner
+    reading this page is reading the only layer they control. Expired
+    rows are included with `active` false rather than hidden — a rule
+    that stopped applying last month is the first thing you look for
+    when a decision changed.
+    """
+    tenant = _tenant_for_admin(claims, tenant_id)
+    sim, _ = _pools(request)
+    rows = await fetch_with_tenant(
+        sim, tenant,
+        """
+        SELECT payer_id, cdt_code, rule_overrides, reason, active,
+               effective_from, effective_to
+        FROM overlay_rules
+        WHERE tenant_id = $1
+        ORDER BY active DESC, payer_id, cdt_code
+        """,
+        tenant,
+    )
+    out = []
+    for r in rows:
+        raw = r["rule_overrides"]
+        overrides = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        out.append({
+            "payer_id": r["payer_id"],
+            "payer_name": _payer_name(r["payer_id"]),
+            "cdt_code": r["cdt_code"],
+            "procedure": _PROC_NAMES.get(r["cdt_code"], r["cdt_code"]),
+            "rule_overrides": overrides,
+            "reason": r["reason"],
+            "active": r["active"],
+            "effective_from": (
+                r["effective_from"].isoformat() if r["effective_from"] else None
+            ),
+            "effective_to": (
+                r["effective_to"].isoformat() if r["effective_to"] else None
+            ),
+        })
+    return out
+
+
+@router.get("/admin/practice")
+async def practice_settings(
+    request: Request,
+    tenant_id: str | None = None,
+    claims=Depends(require_practice_admin),
+) -> dict:
+    """Providers and payer mix for one practice.
+
+    The name and address are NOT here — they come back on the token
+    (auth.TENANT_NAMES), so a page that already knows who is signed in
+    does not need a round trip to render its own heading.
+    """
+    tenant = _tenant_for_admin(claims, tenant_id)
+    sim, _ = _pools(request)
+
+    providers = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT provider_npi, first_name, last_name, credential, "
+        "       network_status, oig_excluded "
+        "FROM providers WHERE tenant_id = $1 ORDER BY last_name",
+        tenant,
+    )
+
+    # "Primary payer" is not configured anywhere — it is whichever payer
+    # the practice's cases actually run against. Counting is the only
+    # honest way to answer it.
+    payers = await fetch_with_tenant(
+        sim, tenant,
+        """
+        SELECT payer_id, COUNT(*) AS n
+        FROM pred_requests
+        WHERE tenant_id = $1 AND payer_id IS NOT NULL
+        GROUP BY payer_id
+        ORDER BY n DESC
+        """,
+        tenant,
+    )
+
+    return {
+        "tenant_id": tenant,
+        "providers": [
+            {
+                "provider_npi": p["provider_npi"],
+                "name": (
+                    f"{(p['first_name'] or '').title()} "
+                    f"{(p['last_name'] or '').title()}"
+                ).strip(),
+                "credential": p["credential"] or "",
+                "network_status": p["network_status"] or "unknown",
+                # Surfaced, not filtered. A provider on the OIG
+                # exclusion list is the single most expensive thing on
+                # this page — hiding the row would hide the problem.
+                "oig_excluded": bool(p["oig_excluded"]),
+            }
+            for p in providers
+        ],
+        "payers": [
+            {
+                "payer_id": p["payer_id"],
+                "payer_name": _payer_name(p["payer_id"]),
+                "patients": p["n"],
+            }
+            for p in payers
+        ],
     }

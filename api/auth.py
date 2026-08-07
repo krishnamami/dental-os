@@ -158,6 +158,21 @@ async def require_admin(claims=Depends(get_claims)) -> dict:
     return claims
 
 
+async def require_practice_admin(claims=Depends(get_claims)) -> dict:
+    """accord_admin anywhere, or a practice owner INSIDE THEIR OWN TENANT.
+
+    This is deliberately weaker than require_admin and must never be
+    used on a route that can read across tenants. Every route that
+    depends on it has to scope by `tenant_filter(claims)` rather than by
+    a tenant_id the caller sent — a dso_owner who passes
+    ?tenant_id=someone_else is asking a question they may not ask, and
+    the route answers about their own practice instead.
+    """
+    if claims.get("role") in ("accord_admin", "dso_owner"):
+        return claims
+    raise HTTPException(403, "Admin only")
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Guards for the DATA routes.
 #
@@ -351,8 +366,16 @@ async def impersonate(
 
 @router.get("/users")
 async def list_users(
-    tenant_id: str | None = None, claims=Depends(require_admin)
+    tenant_id: str | None = None, claims=Depends(require_practice_admin)
 ) -> list[dict]:
+    # A practice owner reads their own staff and nobody else's. The
+    # query parameter is IGNORED for them, not validated — validating it
+    # would 403 on a mistyped tenant and confirm which tenants exist.
+    if claims.get("role") != "accord_admin":
+        tenant_id = tenant_filter(claims)
+        if not tenant_id:
+            raise HTTPException(403, "Admin only")
+
     if tenant_id:
         rows = await _pool().fetch(
             "SELECT user_id, email, name, role, tenant_id FROM users "
