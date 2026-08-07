@@ -26,7 +26,9 @@ import logging
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+
+from api.auth import assert_tenant_allowed, require_claims_or_demo, tenant_filter
 
 from api.schemas import (
     AppealResponse,
@@ -305,13 +307,23 @@ def _open_condition_codes(signals: list[dict]) -> list[str]:
 
 @router.get("/decisions/{pred_request_id}", response_model=DecisionBundleResponse)
 async def get_decision_bundle(
-    pred_request_id: str, request: Request, refresh: bool = False,
+    pred_request_id: str,
+    request: Request,
+    refresh: bool = False,
+    claims=Depends(require_claims_or_demo),
 ) -> DecisionBundleResponse:
     """The complete decision bundle — all nine personas, five waves.
 
     `?refresh=true` forces a re-run. It appends a new bundle and marks
     it current; the prior one stays in the table as history.
     """
+    # ── Tenant boundary ──────────────────────────────────────────
+    # _tenant_for resolves which practice OWNS this pre-D. The caller's
+    # claims say which practice they may read. If those differ, 404 —
+    # never 403, which would confirm the record exists and turn this
+    # route into an id-enumeration oracle. Cached, so this costs one
+    # lookup per pre-D per process.
+    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
     sim, os_pool = _pools(request)
     # Which practice owns this pre-D — NOT the app default. Building the
     # runner with the wrong tenant makes ContextBuilder read zero rows
@@ -397,7 +409,9 @@ async def get_decision_bundle(
     "/decisions/{pred_request_id}/conditions", response_model=ConditionsResponse
 )
 async def get_conditions(
-    pred_request_id: str, request: Request
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
 ) -> ConditionsResponse:
     """The front-desk / billing queue: only what needs action.
 
@@ -406,6 +420,13 @@ async def get_conditions(
     ELIGIBILITY_VERIFIED, PROVIDER_VERIFIED — are deliberately absent:
     this endpoint is a work queue, not a report.
     """
+    # ── Tenant boundary ──────────────────────────────────────────
+    # _tenant_for resolves which practice OWNS this pre-D. The caller's
+    # claims say which practice they may read. If those differ, 404 —
+    # never 403, which would confirm the record exists and turn this
+    # route into an id-enumeration oracle. Cached, so this costs one
+    # lookup per pre-D per process.
+    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
     bundle, outputs = await _read_current_bundle(request, pred_request_id)
     if bundle is None:
         # Reuse the T-33 path so a cold pre-D computes rather than 404s.
@@ -522,13 +543,24 @@ def build_appeal_letter(context: Any, viability: dict) -> Optional[str]:
 
 
 @router.get("/decisions/{pred_request_id}/appeal", response_model=AppealResponse)
-async def get_appeal(pred_request_id: str, request: Request) -> AppealResponse:
+async def get_appeal(
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
+) -> AppealResponse:
     """The appeal packet. 404 when the pre-D was approved.
 
     An approved pre-D has nothing to appeal, so this is genuinely "no
     such resource" rather than an empty packet — an empty 200 would
     read to a caller as "we looked and found no grounds".
     """
+    # ── Tenant boundary ──────────────────────────────────────────
+    # _tenant_for resolves which practice OWNS this pre-D. The caller's
+    # claims say which practice they may read. If those differ, 404 —
+    # never 403, which would confirm the record exists and turn this
+    # route into an id-enumeration oracle. Cached, so this costs one
+    # lookup per pre-D per process.
+    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
     context = await _build_context(request, pred_request_id)
 
     if context.decision not in APPEALABLE_DECISIONS:
@@ -622,7 +654,9 @@ async def get_appeal(pred_request_id: str, request: Request) -> AppealResponse:
     response_model=PatientSummaryResponse,
 )
 async def get_patient_summary(
-    pred_request_id: str, request: Request
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
 ) -> PatientSummaryResponse:
     """The printout that replaces the phone call to Delta Dental.
 
@@ -631,6 +665,13 @@ async def get_patient_summary(
     owes. The discount line matters more than it looks — it is the
     number patients most often mistake for a bill.
     """
+    # ── Tenant boundary ──────────────────────────────────────────
+    # _tenant_for resolves which practice OWNS this pre-D. The caller's
+    # claims say which practice they may read. If those differ, 404 —
+    # never 403, which would confirm the record exists and turn this
+    # route into an id-enumeration oracle. Cached, so this costs one
+    # lookup per pre-D per process.
+    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
     context = await _build_context(request, pred_request_id)
     coverage = resolve_coverage(context, context.catalogue_rules)
 
@@ -746,7 +787,10 @@ async def get_patient_summary(
     "/decisions/{pred_request_id}/feedback", response_model=FeedbackResponse
 )
 async def post_feedback(
-    pred_request_id: str, body: FeedbackRequest, request: Request
+    pred_request_id: str,
+    body: FeedbackRequest,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
 ) -> FeedbackResponse:
     """Capture a human's verdict on one signal.
 
@@ -757,6 +801,13 @@ async def post_feedback(
     direct psql insert, which is how this table will actually be
     backfilled.
     """
+    # ── Tenant boundary ──────────────────────────────────────────
+    # _tenant_for resolves which practice OWNS this pre-D. The caller's
+    # claims say which practice they may read. If those differ, 404 —
+    # never 403, which would confirm the record exists and turn this
+    # route into an id-enumeration oracle. Cached, so this costs one
+    # lookup per pre-D per process.
+    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
     _, os_pool = _pools(request)
     # provider_feedback is RLS-scoped, so feedback on a Tampa pre-D must
     # be written under Tampa or the policy's WITH CHECK rejects it.
@@ -807,7 +858,9 @@ def _f(value: Any) -> float:
 
 
 @router.get("/portfolio/summary")
-async def portfolio_summary(request: Request) -> dict:
+async def portfolio_summary(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> dict:
     """Cross-tenant analytics — every practice in the DSO group.
 
     THE ONLY CROSS-TENANT ENDPOINT in dental-os. Everything else answers
@@ -833,6 +886,23 @@ async def portfolio_summary(request: Request) -> dict:
         pool, _ = _pools(request)
 
     data = await DSOPortfolioManager.aggregate_all_tenants(pool)
+
+    # ── Tenant boundary ──────────────────────────────────────────
+    # This is the one endpoint that aggregates ACROSS practices, so it
+    # needs the opposite treatment to the others: instead of refusing a
+    # foreign pre-D, it narrows the result set.
+    #
+    # accord_admin (tenant_filter -> None) sees the whole group. Anyone
+    # else sees exactly one row — their own practice — even though the
+    # aggregate was computed over all of them. A dso_owner today belongs
+    # to a single tenant_id, so "their DSO group" and "their practice"
+    # are the same thing; when a group spans several tenants this needs
+    # a real group membership table, not a wider filter.
+    allowed = tenant_filter(claims)
+    if allowed is not None:
+        data["tenants"] = [
+            t for t in data["tenants"] if t["tenant_id"] == allowed
+        ]
     tenants = data["tenants"]
 
     total_pre_ds = sum(t["total_pre_ds"] for t in tenants)

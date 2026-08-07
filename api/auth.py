@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -156,6 +156,104 @@ async def require_admin(claims=Depends(get_claims)) -> dict:
     if claims.get("role") != "accord_admin":
         raise HTTPException(403, "Admin only")
     return claims
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Guards for the DATA routes.
+#
+# Everything below is what turns the login from a session into a
+# boundary. Before this, GET /decisions/{id} answered anyone.
+# ─────────────────────────────────────────────────────────────────────
+
+# The one tenant whose synthetic corpus is deliberately public: it is
+# what ?demo=true on the marketing site reads. Nothing else is.
+DEMO_TENANT = "suwanee_smiles"
+
+DEMO_CLAIMS = {
+    "sub": "demo-user",
+    "role": "dentist",
+    "tenant_id": DEMO_TENANT,
+    "demo": True,
+}
+
+
+async def get_claims_optional(token=Depends(oauth2)) -> dict | None:
+    """Claims if a valid token was sent, else None. Never raises."""
+    if not token:
+        return None
+    try:
+        return decode_token(token)
+    except HTTPException:
+        return None
+
+
+async def require_claims(token=Depends(oauth2)) -> dict:
+    """A valid token, or 401."""
+    if not token:
+        raise HTTPException(401, "Authentication required")
+    return decode_token(token)
+
+
+async def require_claims_or_demo(
+    request: Request, token=Depends(oauth2)
+) -> dict:
+    """A valid token, or the public demo identity.
+
+    ⚠ READ THIS BEFORE ADDING ANOTHER CALLER.
+
+    `X-Demo-Mode: true` is a credential-free path into the API. It is
+    here because the marketing site's ?demo=true tour is a deliberate
+    public feature — a prospect must see a real pre-D without an
+    account. The honest way to say that is: SUWANEE_SMILES' SYNTHETIC
+    CORPUS IS PUBLIC DATA. Anyone can read it, header or no header.
+
+    So the header is bounded to the smallest thing that keeps the tour
+    working, rather than left as a general bypass:
+
+      · it grants suwanee_smiles and nothing else — a demo request for a
+        Tampa or Dallas pre-D 404s exactly like a signed-in Suwanee
+        user's would;
+      · it grants SAFE METHODS ONLY. POST /feedback writes a row, and a
+        write is never something an anonymous header should authorise.
+
+    The day a real patient enters suwanee_smiles, this function and the
+    tour it serves both have to go.
+    """
+    if request.headers.get("X-Demo-Mode") == "true":
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return dict(DEMO_CLAIMS)
+        raise HTTPException(
+            403, "Demo mode is read-only. Sign in to write."
+        )
+    if not token:
+        raise HTTPException(401, "Authentication required")
+    return decode_token(token)
+
+
+def tenant_filter(claims: dict) -> str | None:
+    """The tenant a caller is confined to, or None for accord_admin.
+
+    None means "no filter", NOT "no access" — read it carefully at every
+    call site, because getting that backwards fails open.
+    """
+    if claims.get("role") == "accord_admin":
+        return None
+    return claims.get("tenant_id")
+
+
+def assert_tenant_allowed(claims: dict, tenant: str) -> None:
+    """Refuse a caller reading a pre-D that belongs to someone else.
+
+    404, not 403. A 403 confirms the record exists under another
+    practice, which turns this endpoint into an oracle: walk the id
+    space, and the difference between 403 and 404 maps out every
+    competitor's caseload. 404 says only "not yours to see".
+    """
+    allowed = tenant_filter(claims)
+    if allowed is None:
+        return  # accord_admin
+    if allowed != tenant:
+        raise HTTPException(404, "Not found")
 
 
 def row_to_user(row) -> UserOut:
