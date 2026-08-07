@@ -24,6 +24,9 @@ export type PayerDecision = "approved" | "denied" | "pended";
 
 export type Role =
   | "front_desk"
+  /** Treatment coordinator — owns the money conversation with the
+   *  patient, between the front desk and the chair. */
+  | "tx_coord"
   | "revenue_ops"
   | "dentist"
   | "dso_owner"

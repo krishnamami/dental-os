@@ -39,6 +39,9 @@ const WorkbenchDetail = lazy(
 const CoverageIntelligence = lazy(
   () => import("./pages/app/coverage/CoverageIntelligence"),
 );
+const CheckIn = lazy(
+  () => import("./pages/app/coverage/CoverageIntelligence"),
+);
 const CoverageDetail = lazy(
   () => import("./pages/app/coverage/CoverageDetail"),
 );
@@ -127,7 +130,15 @@ export default function App() {
                 dynamic ones anyway, but relying on that to keep "all"
                 from being read as a pre-D id is a trap for whoever
                 reorders these next. */}
-            <Route element={<ProductRoute product="coverage" />}>
+            {/* Check-in and patient financial are two workflows over
+                one component — the queue, then the money. Separate
+                gates because a front desk holds the first and not the
+                second half of the second. */}
+            <Route element={<ProductRoute product="checkin" />}>
+              <Route path="/checkin" element={<CheckIn />} />
+            </Route>
+
+            <Route element={<ProductRoute product="patient_financial" />}>
               <Route path="/coverage" element={<CoverageIntelligence />} />
               <Route path="/coverage/all" element={<CoverageIntelligence />} />
               <Route path="/coverage/:id" element={<CoverageDetail />} />
@@ -135,7 +146,7 @@ export default function App() {
 
             {/* Both forms exist: the sidebar links to /evidence, and the
               workbench links to a specific pre-D. */}
-            <Route element={<ProductRoute product="evidence" />}>
+            <Route element={<ProductRoute product="clinical" />}>
               <Route path="/evidence" element={<ClinicalEvidence />} />
               <Route path="/evidence/:id" element={<ClinicalEvidence />} />
             </Route>
@@ -150,7 +161,7 @@ export default function App() {
             </Route>
 
             {/* One page, four tabs, tab chosen by the path. */}
-            <Route element={<ProductRoute product="dso" />}>
+            <Route element={<ProductRoute product="portfolio" />}>
               <Route path="/dso" element={<DSOIntelligence />} />
               <Route path="/dso/denials" element={<DSOIntelligence />} />
               <Route path="/dso/revenue" element={<DSOIntelligence />} />

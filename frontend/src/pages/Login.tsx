@@ -21,10 +21,11 @@ import type { Role } from "../types/dental";
 
 const ROLE_BADGE: Record<Role, { label: string; cls: string }> = {
   dentist: { label: "Dentist", cls: "bg-accord-green-50 text-accord-green-700" },
-  dso_owner: { label: "DSO owner", cls: "bg-blue-50 text-blue-700" },
-  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
+  dso_owner: { label: "Practice owner", cls: "bg-blue-50 text-blue-700" },
+  tx_coord: { label: "Treatment coord", cls: "bg-purple-50 text-purple-700" },
   revenue_ops: { label: "Revenue ops", cls: "bg-amber-50 text-amber-700" },
-  accord_admin: { label: "Admin", cls: "bg-purple-50 text-purple-700" },
+  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
+  accord_admin: { label: "Admin", cls: "bg-slate-800 text-white" },
 };
 
 const DEMO_GROUPS: Array<{
@@ -36,8 +37,9 @@ const DEMO_GROUPS: Array<{
     users: [
       { name: "Dr. Sridhar Chinta", email: "drchinta@suwaneesmiles.com", role: "dentist" },
       { name: "Dr. Shyam Patel", email: "drshyam@suwaneesmiles.com", role: "dso_owner" },
-      { name: "Sarah R.", email: "sarah@suwaneesmiles.com", role: "front_desk" },
+      { name: "Jennifer M.", email: "tc@suwaneesmiles.com", role: "tx_coord" },
       { name: "Kim B.", email: "billing@suwaneesmiles.com", role: "revenue_ops" },
+      { name: "Sarah R.", email: "sarah@suwaneesmiles.com", role: "front_desk" },
     ],
   },
   {
@@ -45,8 +47,9 @@ const DEMO_GROUPS: Array<{
     users: [
       { name: "Dr. Maria Rodriguez", email: "drrodriguez@tampabaysmiles.com", role: "dentist" },
       { name: "Dr. Shyam Patel", email: "drshyam@tampabaysmiles.com", role: "dso_owner" },
-      { name: "Sarah T.", email: "sarah@tampabaysmiles.com", role: "front_desk" },
+      { name: "Maria C.", email: "tc@tampabaysmiles.com", role: "tx_coord" },
       { name: "Kim T.", email: "billing@tampabaysmiles.com", role: "revenue_ops" },
+      { name: "Sarah T.", email: "sarah@tampabaysmiles.com", role: "front_desk" },
     ],
   },
   {

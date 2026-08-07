@@ -34,10 +34,11 @@ const TENANT_LABEL: Record<string, string> = {
 
 const ROLE_BADGE: Record<Role, { label: string; cls: string }> = {
   dentist: { label: "Dentist", cls: "bg-accord-green-50 text-accord-green-700" },
-  dso_owner: { label: "DSO owner", cls: "bg-blue-50 text-blue-700" },
-  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
+  dso_owner: { label: "Practice owner", cls: "bg-blue-50 text-blue-700" },
+  tx_coord: { label: "Treatment coord", cls: "bg-purple-50 text-purple-700" },
   revenue_ops: { label: "Revenue ops", cls: "bg-amber-50 text-amber-700" },
-  accord_admin: { label: "Admin", cls: "bg-purple-50 text-purple-700" },
+  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
+  accord_admin: { label: "Admin", cls: "bg-slate-800 text-white" },
 };
 
 function initials(name: string): string {

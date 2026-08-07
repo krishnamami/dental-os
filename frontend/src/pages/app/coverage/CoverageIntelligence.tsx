@@ -182,7 +182,9 @@ const STATUS_CLS: Record<Status, string> = {
   Denied: "bg-red-100 text-red-800",
 };
 
-const WAVE_COLS = ["Verify", "Coverage", "Clinical", "Docs", "Decision"];
+// Waves 1-5 as the engine runs them — NOT ...Clinical/Docs/Decision.
+// The clinical reviewer is in wave 2; wave 3 is documentation.
+const WAVE_COLS = ["Verify", "Coverage", "Documents", "Decision", "Appeal"];
 
 // ── Shared bits ──────────────────────────────────────────────────────
 
@@ -232,6 +234,11 @@ export default function CoverageIntelligence() {
   const { effectiveUser, role } = useAuth();
 
   const isAll = pathname.startsWith("/coverage/all");
+  // /checkin is the same "my patients today" list under its own
+  // workflow. Front desk holds `checkin` but NOT `patient_financial`'s
+  // second tab of every pre-D in the practice, so the tab strip is
+  // hidden there rather than rendering a link that would bounce them.
+  const isCheckIn = pathname.startsWith("/checkin");
 
   const [docsFor, setDocsFor] = useState<string | null>(null);
   const [toast, setToast] = useState("");
@@ -269,6 +276,7 @@ export default function CoverageIntelligence() {
   return (
     <div>
       {/* ── Sub-tabs ───────────────────────────────────────────── */}
+      {!isCheckIn && (
       <nav className="flex gap-5 border-b border-slate-200 bg-white px-5 sm:px-6">
         <NavLink to={demoLink("/coverage")} end className={() => tabCls(!isAll)}>
           My patients today
@@ -277,6 +285,7 @@ export default function CoverageIntelligence() {
           All pre-Ds
         </NavLink>
       </nav>
+      )}
 
       {!isAll ? (
         /* ── Tab 1 ──────────────────────────────────────────── */

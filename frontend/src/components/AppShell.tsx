@@ -2,9 +2,9 @@
  * C-03 — the signed-in chrome.
  *
  * Sidebar on desktop, bottom tab bar on mobile, 48px top bar on both.
- * Nav items come from NAV_FOR_ROLE, so a dentist and a DSO owner get
- * genuinely different products rather than the same page with things
- * hidden.
+ * Nav items are WORKFLOW_NAV filtered by the role's gates, so a
+ * dentist and a front desk get genuinely different products rather
+ * than the same page with things hidden.
  *
  * Wraps every protected route via <Outlet />, which is what keeps the
  * shell from re-mounting (and re-fetching) on every navigation.
@@ -14,7 +14,7 @@ import { Eye, LogOut } from "lucide-react";
 
 import { ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { useDemoLink } from "../hooks/useDemo";
-import { NAV_FOR_ROLE, titleForPath, type NavItem } from "../routes";
+import { WORKFLOW_NAV, titleForPath, type NavItem } from "../routes";
 import DemoBanner from "./DemoBanner";
 import { AccordLogo } from "./AccordLogo";
 
@@ -44,7 +44,7 @@ export default function AppShell() {
     isDemo,
     effectiveUser,
     viewAs,
-    navAllows,
+    navOrder,
     stopImpersonating,
     logout,
   } = useAuth();
@@ -52,13 +52,12 @@ export default function AppShell() {
   const navigate = useNavigate();
   const demoLink = useDemoLink();
 
-  // Two filters, not one. NAV_FOR_ROLE decides what a role's sidebar
-  // looks like; navAllows is the product gate the routes enforce. They
-  // agree today — if they ever disagree, the stricter one should win,
-  // which is what the && does.
-  const items = (role ? NAV_FOR_ROLE[role] : []).filter((i) =>
-    navAllows(i.gate),
-  );
+  // One list of seven, filtered and ORDERED by the role. navOrder is
+  // ROLE_NAV, so a DSO owner opens on Portfolio and a treatment
+  // coordinator on Check-in without a second table deciding it.
+  const items: NavItem[] = navOrder
+    .map((gate) => WORKFLOW_NAV.find((w) => w.gate === gate))
+    .filter((w): w is NavItem => Boolean(w));
   const title = titleForPath(pathname);
   const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
 

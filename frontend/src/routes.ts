@@ -1,33 +1,20 @@
 /**
- * C-02 — where each role lives.
+ * C-02 — the workflow map.
  *
- * One table, imported by Login (where to land after sign-in),
- * AppShell (which sidebar to draw) and App (which route redirects
- * home). Three copies of this map would drift the first time a role
- * gained a page.
+ * WORKFLOW_NAV is what the sidebar draws; AuthContext decides which of
+ * its seven entries a role may see. HOME_FOR_ROLE moved to AuthContext
+ * alongside the permission tables it belongs with.
  */
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity,
   BarChart3,
-  Building2,
-  CalendarCheck,
   ClipboardCheck,
-  ClipboardList,
-  Clock,
-  FileSearch,
-  FileText,
-  FolderPlus,
-  GraduationCap,
-  Layers,
+  Microscope,
   Receipt,
-  Send,
-  ShieldCheck,
+  Settings,
   TrendingUp,
-  Users,
+  UserCheck,
 } from "lucide-react";
-
-import type { Role } from "./types/dental";
 
 export interface NavItem {
   label: string;
@@ -42,46 +29,60 @@ export interface NavItem {
   gate: string;
 }
 
-export const NAV_FOR_ROLE: Record<Role, NavItem[]> = {
-  dentist: [
-    { label: "My patients today", to: "/workbench", icon: CalendarCheck, gate: "Pre-D" },
-    { label: "Clinical evidence", to: "/evidence", icon: FileSearch, gate: "Clinical" },
-    { label: "Pre-D review", to: "/workbench?filter=review", icon: ClipboardCheck, gate: "Pre-D" },
-  ],
-  front_desk: [
-    { label: "Patient check-in", to: "/coverage", icon: Users, gate: "Coverage" },
-    { label: "Coverage check", to: "/coverage", icon: ShieldCheck, gate: "Coverage" },
-    { label: "Document requests", to: "/workbench?filter=docs", icon: FileText, gate: "Pre-D" },
-    { label: "SLA queue", to: "/workbench?filter=sla", icon: Clock, gate: "Pre-D" },
-  ],
-  revenue_ops: [
-    { label: "Submission queue", to: "/revenue-ops", icon: Send, gate: "Revenue ops" },
-    { label: "Conditions", to: "/revenue-ops/conditions", icon: ClipboardList, gate: "Revenue ops" },
-    { label: "Appeals", to: "/revenue-ops/appeals", icon: Receipt, gate: "Revenue ops" },
-    { label: "Analytics", to: "/revenue-ops/analytics", icon: TrendingUp, gate: "Revenue ops" },
-    { label: "Coverage checks", to: "/coverage", icon: ShieldCheck, gate: "Coverage" },
-  ],
-  dso_owner: [
-    { label: "Portfolio", to: "/dso", icon: BarChart3, gate: "DSO" },
-    { label: "Denial patterns", to: "/dso/denials", icon: Layers, gate: "DSO" },
-    { label: "Revenue", to: "/dso/revenue", icon: TrendingUp, gate: "DSO" },
-    { label: "Training", to: "/dso/training", icon: GraduationCap, gate: "DSO" },
-  ],
-  accord_admin: [
-    { label: "Tenants", to: "/admin", icon: Building2, gate: "Admin" },
-    { label: "Onboard tenant", to: "/admin/onboard", icon: FolderPlus, gate: "Admin" },
-    { label: "Catalogue", to: "/admin/catalogue", icon: Layers, gate: "Admin" },
-    { label: "System health", to: "/admin/health", icon: Activity, gate: "Admin" },
-  ],
-};
+/**
+ * The seven workflows, once.
+ *
+ * There is no longer a per-role list. Five lists of overlapping items
+ * meant "Coverage check" existed twice with two labels and one of them
+ * always went stale; now AppShell filters THIS list by the role's
+ * gates. Adding a workflow is one entry, and no role can accidentally
+ * keep a link to something it no longer holds.
+ *
+ * `gate` must match a string in AuthContext.ROLE_NAV exactly.
+ */
+export const WORKFLOW_NAV: NavItem[] = [
+  { label: "Check-in", to: "/checkin", icon: UserCheck, gate: "Check-In" },
+  {
+    label: "Patient financial",
+    to: "/coverage",
+    icon: Receipt,
+    gate: "Patient Financial",
+  },
+  {
+    label: "Pre-D workbench",
+    to: "/workbench",
+    icon: ClipboardCheck,
+    gate: "Pre-D Workbench",
+  },
+  {
+    label: "Clinical intelligence",
+    to: "/evidence/PRED-SIM-DA-A01",
+    icon: Microscope,
+    gate: "Clinical Intelligence",
+  },
+  {
+    label: "Revenue operations",
+    to: "/revenue-ops",
+    icon: TrendingUp,
+    gate: "Revenue Ops",
+  },
+  {
+    label: "Portfolio intelligence",
+    to: "/dso",
+    icon: BarChart3,
+    gate: "Portfolio",
+  },
+  { label: "Administration", to: "/admin", icon: Settings, gate: "Admin" },
+];
 
 /** Page titles for the top bar, longest prefix wins. */
 export const TITLE_FOR_PATH: Array<[string, string]> = [
   ["/workbench/", "Pre-D review"],
   ["/workbench", "Pre-D workbench"],
+  ["/checkin", "Check-in"],
   ["/coverage/all", "All pre-Ds"],
-  ["/coverage", "Coverage intelligence"],
-  ["/evidence", "Clinical evidence"],
+  ["/coverage", "Patient financial"],
+  ["/evidence", "Clinical intelligence"],
   ["/revenue-ops/conditions", "Conditions"],
   ["/revenue-ops/appeals", "Appeals"],
   ["/revenue-ops/analytics", "Revenue analytics"],
@@ -89,11 +90,11 @@ export const TITLE_FOR_PATH: Array<[string, string]> = [
   ["/dso/denials", "Denial patterns"],
   ["/dso/revenue", "Revenue"],
   ["/dso/training", "Training"],
-  ["/dso", "DSO intelligence"],
+  ["/dso", "Portfolio intelligence"],
   ["/admin/onboard", "Onboard tenant"],
   ["/admin/catalogue", "Catalogue"],
   ["/admin/health", "System health"],
-  ["/admin", "Admin console"],
+  ["/admin", "Administration"],
 ];
 
 export function titleForPath(pathname: string): string {

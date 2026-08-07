@@ -32,6 +32,7 @@ import type { AuthUser, ImpersonatedUser, Role } from "../types/dental";
 
 export const ROLES: Role[] = [
   "front_desk",
+  "tx_coord",
   "revenue_ops",
   "dentist",
   "dso_owner",
@@ -40,9 +41,12 @@ export const ROLES: Role[] = [
 
 export const ROLE_LABELS: Record<Role, string> = {
   front_desk: "Front desk",
+  tx_coord: "Treatment coordinator",
   revenue_ops: "Revenue operations",
   dentist: "Dentist",
-  dso_owner: "DSO owner",
+  // "Practice owner", not "DSO owner": the person signing in owns the
+  // practice. DSO is what a group of them is called.
+  dso_owner: "Practice owner",
   accord_admin: "Accord admin",
 };
 
@@ -50,41 +54,77 @@ const TOKEN_KEY = "accord_dental_token";
 const VIEWAS_KEY = "accord_dental_viewas";
 const ORIG_KEY = "accord_dental_orig_token";
 
-/** Which products a role may open. */
+/**
+ * The seven workflows, and who may open each.
+ *
+ * Named for the JOB, not the page: `patient_financial` is the money
+ * conversation, which happens to render at /coverage. When a workflow
+ * moves route this table does not change, and a role's permissions
+ * cannot silently follow a URL rename.
+ *
+ * Note what front desk LOST here: `workbench`. Reading a full pre-D —
+ * every persona's finding on a patient's clinical case — was never
+ * part of checking someone in. Narrowing it is the point of splitting
+ * the roles.
+ */
 const ROLE_PRODUCTS: Record<Role, string[]> = {
-  front_desk: ["coverage", "workbench"],
-  revenue_ops: ["revenue_ops", "workbench", "coverage"],
-  dentist: ["workbench", "coverage", "evidence", "revenue_ops", "dso"],
-  dso_owner: ["dso", "revenue_ops", "workbench"],
-  accord_admin: [
+  front_desk: ["checkin", "patient_financial"],
+  tx_coord: ["checkin", "patient_financial", "workbench"],
+  revenue_ops: ["workbench", "revenue_ops", "patient_financial"],
+  dentist: [
     "workbench",
-    "coverage",
-    "evidence",
+    "clinical",
+    "patient_financial",
     "revenue_ops",
-    "dso",
+    "portfolio",
+  ],
+  dso_owner: ["portfolio", "revenue_ops", "workbench"],
+  accord_admin: [
+    "checkin",
+    "patient_financial",
+    "workbench",
+    "clinical",
+    "revenue_ops",
+    "portfolio",
     "admin",
   ],
 };
 
-/** Which sidebar entries a role sees, by label. */
+/**
+ * Which sidebar entries a role sees, in the order they see them.
+ *
+ * The gate strings must match WORKFLOW_NAV[].gate in routes.ts exactly.
+ * A typo here does not error — it silently removes the entry, which is
+ * why both tables name the same seven strings and nothing derives one
+ * from the other by string munging.
+ */
 const ROLE_NAV: Record<Role, string[]> = {
-  front_desk: ["Coverage", "Pre-D"],
-  revenue_ops: ["Revenue ops", "Pre-D", "Coverage"],
-  dentist: ["Pre-D", "Coverage", "Clinical", "Revenue ops", "DSO"],
-  dso_owner: ["DSO", "Revenue ops", "Pre-D"],
+  front_desk: ["Check-In", "Patient Financial"],
+  tx_coord: ["Check-In", "Patient Financial", "Pre-D Workbench"],
+  revenue_ops: ["Pre-D Workbench", "Revenue Ops", "Patient Financial"],
+  dentist: [
+    "Pre-D Workbench",
+    "Clinical Intelligence",
+    "Patient Financial",
+    "Revenue Ops",
+    "Portfolio",
+  ],
+  dso_owner: ["Portfolio", "Revenue Ops", "Pre-D Workbench"],
   accord_admin: [
-    "Pre-D",
-    "Coverage",
-    "Clinical",
-    "Revenue ops",
-    "DSO",
+    "Check-In",
+    "Patient Financial",
+    "Pre-D Workbench",
+    "Clinical Intelligence",
+    "Revenue Ops",
+    "Portfolio",
     "Admin",
   ],
 };
 
 /** Where a role lands after signing in. */
 export const HOME_FOR_ROLE: Record<Role, string> = {
-  front_desk: "/coverage",
+  front_desk: "/checkin",
+  tx_coord: "/coverage",
   revenue_ops: "/revenue-ops",
   dentist: "/workbench",
   dso_owner: "/dso",
@@ -167,6 +207,8 @@ interface AuthState {
   stopImpersonating: () => Promise<void>;
   hasProduct: (product: string) => boolean;
   navAllows: (label: string) => boolean;
+  /** The role's gates in the order they should appear in the sidebar. */
+  navOrder: string[];
   homeRoute: string;
 }
 
@@ -332,6 +374,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role ? (ROLE_PRODUCTS[role] ?? []).includes(product) : false,
       navAllows: (label: string) =>
         role ? (ROLE_NAV[role] ?? []).includes(label) : false,
+      navOrder: role ? (ROLE_NAV[role] ?? []) : [],
       homeRoute: role ? (HOME_FOR_ROLE[role] ?? "/workbench") : "/workbench",
     };
   }, [
