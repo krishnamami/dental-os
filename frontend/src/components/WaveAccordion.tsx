@@ -16,12 +16,22 @@ import SignalCard, { toneFor } from "./SignalCard";
  * usually read "verified", and opening all five buries the two that
  * need a human under thirty lines of confirmation.
  */
+/**
+ * Titles come from WAVE_CONFIG in dental-os core/cron/runner.py, not
+ * from what the wave numbers sound like.
+ *
+ * Waves 3 and 4 read the wrong way round to intuition: the CLINICAL
+ * reviewer runs in wave 2 alongside coverage, wave 3 is documentation,
+ * and wave 4 is the verdict. Labelling 3 "Clinical Evidence" — as this
+ * did until now — filed every documentation gap under a clinical
+ * heading.
+ */
 const WAVE_TITLES: Record<string, string> = {
-  "1": "Wave 1 — Eligibility & Provider",
-  "2": "Wave 2 — Coverage & Benefits",
-  "3": "Wave 3 — Clinical Evidence",
-  "4": "Wave 4 — Documentation & Compliance",
-  "5": "Wave 5 — Final Assessment & Appeals",
+  "1": "Wave 1 — Eligibility, Provider & Fraud",
+  "2": "Wave 2 — Coverage & Clinical Review",
+  "3": "Wave 3 — Documentation",
+  "4": "Wave 4 — Pre-D Assessment",
+  "5": "Wave 5 — Appeals & Portfolio",
 };
 
 const DEFAULT_OPEN = new Set(["3", "4"]);

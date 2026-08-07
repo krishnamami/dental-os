@@ -31,8 +31,8 @@ import { HOME_FOR_ROLE } from "./routes";
  */
 const LandingPage = lazy(() => import("./pages/lp/LandingPage"));
 const Login = lazy(() => import("./pages/Login"));
-const WorkbenchQueue = lazy(
-  () => import("./pages/app/workbench/WorkbenchQueue"),
+const WorkbenchPipeline = lazy(
+  () => import("./pages/app/workbench/WorkbenchPipeline"),
 );
 const WorkbenchDetail = lazy(
   () => import("./pages/app/workbench/WorkbenchDetail"),
@@ -75,7 +75,7 @@ export default function App() {
           <Route element={<AppShell />}>
             <Route path="/app" element={<RoleHome />} />
 
-            <Route path="/workbench" element={<WorkbenchQueue />} />
+            <Route path="/workbench" element={<WorkbenchPipeline />} />
             <Route path="/workbench/:id" element={<WorkbenchDetail />} />
 
             <Route path="/coverage" element={<CoverageIntelligence />} />
