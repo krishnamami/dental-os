@@ -345,20 +345,54 @@ function PatientCard({
   );
 }
 
+type Filter = "all" | "heads_up" | "clear" | "checked_in";
+
+const FILTER_STYLE: Record<
+  Exclude<Filter, "all">,
+  { active: string; ring: string }
+> = {
+  heads_up: { active: "border-amber-400 bg-amber-50", ring: "ring-amber-300" },
+  clear: { active: "border-green-500 bg-green-50", ring: "ring-green-300" },
+  checked_in: { active: "border-slate-400 bg-slate-50", ring: "ring-slate-300" },
+};
+
+/**
+ * A count and a filter in one control.
+ *
+ * The number is always the TOTAL for that status, never the filtered
+ * view — a card that changed its own number when you clicked it would
+ * make it impossible to see what you had narrowed away from.
+ */
 function StatCard({
   label,
   value,
   tone,
+  status,
+  active,
+  onClick,
 }: {
   label: string;
   value: number;
   tone: string;
+  status: Exclude<Filter, "all">;
+  active: boolean;
+  onClick: () => void;
 }) {
+  const style = FILTER_STYLE[status];
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`cursor-pointer rounded-xl border p-5 text-left transition ${
+        active
+          ? `border-2 ${style.active} ring-2 ${style.ring}`
+          : "border-gray-200 bg-white hover:bg-slate-50"
+      }`}
+    >
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-1 text-3xl font-semibold ${tone}`}>{value}</p>
-    </div>
+    </button>
   );
 }
 
@@ -367,6 +401,7 @@ export default function CheckIn() {
   const { isDemo } = useDemo();
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
   // Demo mode cannot write, so its check-ins live here instead.
   const [localCheckIn, setLocalCheckIn] = useState<Record<string, string>>({});
 
@@ -414,9 +449,30 @@ export default function CheckIn() {
 
   const isDone = (p: CheckInPatient) =>
     p.status === "checked_in" || Boolean(localCheckIn[p.pred_request_id]);
-  const headsUp = patients.filter((p) => p.status === "heads_up" && !isDone(p));
-  const clear = patients.filter((p) => p.status === "clear" && !isDone(p));
-  const seen = patients.filter(isDone);
+
+  // ONE definition of where a patient sits, used by the counts, the
+  // sections and the filter alike. p.status alone is not it: a demo
+  // check-in is local, so the API still calls that patient heads_up.
+  // Filtering on the raw field would file them under HEADS UP while
+  // the CHECKED IN card counted them — two answers on one screen.
+  const statusOf = (p: CheckInPatient): Exclude<Filter, "all"> =>
+    isDone(p) ? "checked_in" : p.status;
+
+  const inBucket = (s: Exclude<Filter, "all">) =>
+    patients.filter((p) => statusOf(p) === s);
+
+  const allHeadsUp = inBucket("heads_up");
+  const allClear = inBucket("clear");
+  const allSeen = inBucket("checked_in");
+
+  const shows = (s: Exclude<Filter, "all">) => filter === "all" || filter === s;
+  const headsUp = shows("heads_up") ? allHeadsUp : [];
+  const clear = shows("clear") ? allClear : [];
+  const seen = shows("checked_in") ? allSeen : [];
+
+  function toggle(s: Exclude<Filter, "all">) {
+    setFilter((f) => (f === s ? "all" : s));
+  }
 
   const firstName = firstNameOf(effectiveUser?.name ?? "");
   const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
@@ -438,13 +494,13 @@ export default function CheckIn() {
           {!isLoading && (
             <span
               className={`rounded-full px-3 py-1 text-[12px] font-semibold ${
-                headsUp.length > 0
+                allHeadsUp.length > 0
                   ? "bg-amber-50 text-amber-700"
                   : "bg-green-50 text-green-700"
               }`}
             >
-              {headsUp.length > 0
-                ? `⚠ ${headsUp.length} heads up`
+              {allHeadsUp.length > 0
+                ? `⚠ ${allHeadsUp.length} heads up`
                 : "✅ All clear"}
             </span>
           )}
@@ -453,16 +509,39 @@ export default function CheckIn() {
         <div className="mt-5 grid grid-cols-3 gap-3">
           <StatCard
             label="Heads up"
-            value={headsUp.length}
+            value={allHeadsUp.length}
             tone="text-amber-600"
+            status="heads_up"
+            active={filter === "heads_up"}
+            onClick={() => toggle("heads_up")}
           />
-          <StatCard label="Clear" value={clear.length} tone="text-green-600" />
+          <StatCard
+            label="Clear"
+            value={allClear.length}
+            tone="text-green-600"
+            status="clear"
+            active={filter === "clear"}
+            onClick={() => toggle("clear")}
+          />
           <StatCard
             label="Checked in"
-            value={seen.length}
+            value={allSeen.length}
             tone="text-slate-400"
+            status="checked_in"
+            active={filter === "checked_in"}
+            onClick={() => toggle("checked_in")}
           />
         </div>
+
+        {filter !== "all" && (
+          <button
+            type="button"
+            onClick={() => setFilter("all")}
+            className="mb-3 mt-4 text-sm text-slate-500 transition hover:text-slate-800"
+          >
+            ← All patients
+          </button>
+        )}
 
         {isLoading && (
           <div className="mt-6 space-y-3">
@@ -502,6 +581,15 @@ export default function CheckIn() {
             No patients scheduled for today.
           </p>
         )}
+
+        {!isLoading &&
+          !isError &&
+          patients.length > 0 &&
+          headsUp.length + clear.length + seen.length === 0 && (
+            <p className="mt-6 rounded-xl border border-gray-200 bg-white p-5 text-[13px] text-slate-500">
+              No patients in that group right now.
+            </p>
+          )}
 
         {headsUp.length > 0 && (
           <section className="mt-6">
