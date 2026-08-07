@@ -1,6 +1,6 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
@@ -199,10 +199,9 @@ function PatientCard({
   onComplete: () => void;
   onToast: (m: string) => void;
 }) {
-  const navigate = useNavigate();
-  const demoLink = useDemoLink();
+  // No navigate/demoLink here any more. The card no longer routes
+  // anywhere — the coordinator's work ends on this screen.
   const heads = p.alerts.length > 0;
-  const needsPreD = p.alerts.some((a) => a.type === "pre_d_required");
   const downgrade = ps?.procedures.find((x) => x.downgrade_applied);
   const progress = checked.size;
 
@@ -467,15 +466,6 @@ function PatientCard({
             >
               Email to patient
             </button>
-            {needsPreD && (
-              <button
-                type="button"
-                onClick={() => navigate(demoLink(`/workbench/${p.pred_request_id}`))}
-                className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
-              >
-                Submit pre-D →
-              </button>
-            )}
           </div>
         </>
       )}
