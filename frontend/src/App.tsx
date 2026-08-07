@@ -40,6 +40,9 @@ const CoverageIntelligence = lazy(
   () => import("./pages/app/coverage/CoverageIntelligence"),
 );
 const CheckIn = lazy(() => import("./pages/app/checkin/CheckIn"));
+const PatientFinancial = lazy(
+  () => import("./pages/app/coverage/PatientFinancial"),
+);
 const CoverageDetail = lazy(
   () => import("./pages/app/coverage/CoverageDetail"),
 );
@@ -137,7 +140,7 @@ export default function App() {
             </Route>
 
             <Route element={<ProductRoute product="patient_financial" />}>
-              <Route path="/coverage" element={<CoverageIntelligence />} />
+              <Route path="/coverage" element={<PatientFinancial />} />
               <Route path="/coverage/all" element={<CoverageIntelligence />} />
               <Route path="/coverage/:id" element={<CoverageDetail />} />
             </Route>
