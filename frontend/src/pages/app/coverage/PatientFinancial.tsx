@@ -1,10 +1,8 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { NavLink } from "react-router-dom";
 
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
-import { useDemoLink } from "../../../hooks/useDemo";
 import type { PatientSummary } from "../../../types/dental";
 import { formatCurrency } from "../../../utils/format";
 import {
@@ -475,7 +473,6 @@ function PatientCard({
 
 export default function PatientFinancial() {
   const { effectiveUser, role } = useAuth();
-  const demoLink = useDemoLink();
   const [toast, setToast] = useState<string | null>(null);
   const [filter, setFilter] = useState<Bucket | "all">("all");
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
@@ -565,24 +562,13 @@ export default function PatientFinancial() {
     );
   }
 
-  const tabCls = (active: boolean) =>
-    `-mb-px border-b-2 px-1 py-2.5 text-[13px] font-medium transition ${
-      active
-        ? "border-accord-green-900 text-accord-green-900"
-        : "border-transparent text-slate-500 hover:text-slate-800"
-    }`;
-
+  // No tab bar. This page is the whole of the coordinator's screen —
+  // the "All pre-Ds" tab pointed at /coverage/all, which is the
+  // reviewer's queue and is not part of this job. The route still
+  // exists for the roles that hold it; it is just not reachable from
+  // here.
   return (
     <div className="relative min-h-full pb-16">
-      <nav className="flex gap-5 border-b border-slate-200 bg-white px-5 sm:px-6">
-        <NavLink to={demoLink("/coverage")} end className={() => tabCls(true)}>
-          Patient financial
-        </NavLink>
-        <NavLink to={demoLink("/coverage/all")} className={() => tabCls(false)}>
-          All pre-Ds
-        </NavLink>
-      </nav>
-
       <div className="mx-auto max-w-4xl px-6 py-6">
         <div>
           <h1 className="text-[22px] font-semibold text-gray-900">

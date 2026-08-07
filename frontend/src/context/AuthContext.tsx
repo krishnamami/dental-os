@@ -73,7 +73,11 @@ const ORIG_KEY = "accord_dental_orig_token";
  */
 const ROLE_PRODUCTS: Record<Role, string[]> = {
   front_desk: ["checkin"],
-  tx_coord: ["checkin", "patient_financial", "workbench"],
+  // The coordinator's job ends at "consultation complete". Reading a
+  // full pre-D — every persona's finding on a clinical case — belongs
+  // to the dentist and revenue ops, and the Submit pre-D button that
+  // used to link there is gone from the card.
+  tx_coord: ["checkin", "patient_financial"],
   revenue_ops: ["workbench", "revenue_ops", "patient_financial"],
   dentist: [
     "workbench",
@@ -112,7 +116,13 @@ const ROLE_NAV: Record<Role, string[]> = {
   // card itself; the per-procedure breakdown at /coverage belongs to
   // the treatment coordinator, who has the conversation about it.
   front_desk: ["Check-In"],
-  tx_coord: ["Check-In", "Patient Financial", "Pre-D Workbench"],
+  // ⚠ One entry, deliberately, though tx_coord still HOLDS `checkin`
+  // above. The coordinator can still open /checkin by URL — the
+  // product is granted, only the link is gone. If the desk queue is
+  // meant to be off-limits to them entirely, `checkin` has to come out
+  // of ROLE_PRODUCTS too; hiding the link alone was exactly what let
+  // front desk reach /coverage.
+  tx_coord: ["Patient Financial"],
   revenue_ops: ["Pre-D Workbench", "Revenue Ops", "Patient Financial"],
   dentist: [
     "Pre-D Workbench",
