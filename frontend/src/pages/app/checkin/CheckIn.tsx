@@ -1,136 +1,348 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
+import { api } from "../../../hooks/useApi";
+import { useDemo } from "../../../hooks/useDemo";
 
 /**
- * F-01 — patient check-in. The front desk's whole screen.
+ * F-01 — patient check-in, from GET /checkin/today.
  *
- * One column of cards, no split panel: a receptionist works down
- * today's list, not across a queue into a detail pane.
+ * One request for the whole morning. The endpoint does the joining and
+ * the translating; this file renders what it returns and reads nothing
+ * else. That is what keeps a signal code, a wave number and a criteria
+ * score off a receptionist's screen — they never reach the browser.
  *
- * ── What this page is NOT ────────────────────────────────────────────
+ * ── Demo mode writes nothing ─────────────────────────────────────────
  *
- * It is not a smaller workbench. Nothing here shows a signal code, a
- * wave number, a criteria score or a persona — a receptionist reading
- * "COVERAGE_BUNDLING_CONFLICT" learns nothing they can act on. Every
- * line below is the plain-English form of a finding, and the figures
- * in it were read from the API on 7 Aug 2026.
- *
- * ── What is real and what is not ─────────────────────────────────────
- *
- * Real: names, plans, procedures, every dollar figure, and which cases
- * need a pre-D. Verified against /decisions/{id} and /patient-summary.
- *
- * NOT real: the appointment times. There is no schedule in dental-os,
- * no appointments table, and no check-in state to persist to — so
- * check-in is remembered in this tab only, and the page says so at the
- * foot rather than implying the practice system was told.
+ * POST /checkin is a write, and X-Demo-Mode is refused on writes by
+ * design: an anonymous header must not mutate shared state. So a demo
+ * visitor's check-in is kept in local state and the card says so. A
+ * signed-in user's goes to the database and survives a refresh.
  */
 
 const GREEN = "#0F4D37";
-const DOT_AMBER = "#d97706";
-const DOT_GREEN = "#16a34a";
 
-type Section = "action" | "ready";
-
-interface Patient {
-  id: string;
-  name: string;
-  dot: string;
-  meta: string;
-  badge: string;
-  finding: string;
-  suggest: string;
-  basedOn: string;
-  queue: string;
-  sla: string | null;
-  section: Section;
+interface Alert {
+  type: string;
+  title: string;
+  detail: string;
 }
 
-/** Ordered by appointment time, and `queue` counts in that same order —
- *  "patient 3 of 5" has to be the third one through the door. */
-const PATIENTS: Patient[] = [
-  {
-    id: "PRED-SIM-DA-A01",
-    name: "James Mitchell",
-    dot: DOT_AMBER,
-    meta: "Delta Dental PPO · Implant + crown · 9:00 AM",
-    badge: "NEEDS ACTION",
-    finding: "Annual max $25 remaining · D6065 downgrade to D2750",
-    suggest:
-      "Verify patient understands $1,825 cost before treatment. Annual max nearly exhausted — only $25 remaining after today's case.",
-    basedOn: "eligibility response, fee schedule, Delta Dental rules",
-    queue: "Patient 1 of 5 · appointment at 9:00 AM",
-    sla: "⚠ Pre-D required before treatment",
-    section: "action",
-  },
-  {
-    id: "PRED-SIM-DA-D04",
-    name: "Linda Taylor",
-    dot: DOT_AMBER,
-    meta: "Delta Dental PPO · Crown · 9:30 AM",
-    badge: "NEEDS ACTION",
-    finding: "D2740 crown paid at D2750 rate — patient owes difference",
-    suggest:
-      "Review the crown downgrade with the patient before seating. Delta pays $570 of the $1,190 allowed, at the D2750 rate.",
-    basedOn: "coverage rules, fee schedule",
-    queue: "Patient 2 of 5 · appointment at 9:30 AM",
-    // D2740 IS pre-D required — the engine says so. Telling the desk
-    // for James and not for Linda would be the gap this page exists
-    // to close.
-    sla: "⚠ Pre-D required before treatment",
-    section: "action",
-  },
-  {
-    id: "PRED-SIM-DA-U01",
-    name: "Robert Thompson",
-    dot: DOT_GREEN,
-    meta: "Delta Dental PPO · Cleaning · 10:00 AM",
-    badge: "READY",
-    finding: "Coverage clean · no issues · patient pays $0",
-    suggest: "No action needed. Patient can check in.",
-    basedOn: "eligibility response, coverage rules",
-    queue: "Patient 3 of 5 · appointment at 10:00 AM",
-    sla: null,
-    section: "ready",
-  },
-  {
-    id: "PRED-SIM-DA-U02",
-    name: "Maria Santos",
-    dot: DOT_GREEN,
-    meta: "Delta Dental PPO · Bitewings · 10:30 AM",
-    badge: "READY",
-    finding: "Coverage clean · 100% covered · patient pays $0",
-    suggest: "No action needed. Patient can check in.",
-    basedOn: "eligibility response, coverage rules",
-    queue: "Patient 4 of 5 · appointment at 10:30 AM",
-    sla: null,
-    section: "ready",
-  },
-  {
-    id: "PRED-SIM-DA-B04",
-    name: "Carlos Rivera",
-    dot: DOT_AMBER,
-    meta: "Delta Dental PPO · Implant + graft · 11:00 AM",
-    badge: "NEEDS ACTION",
-    finding: "Bundling conflict — narrative needed before submission",
-    suggest:
-      "Alert Dr. Chinta: D7953 and D6010 are bundled under D.7.4. Patient pays $1,230.",
-    basedOn: "coverage rules D.7.4, clinical note",
-    queue: "Patient 5 of 5 · appointment at 11:00 AM",
-    sla: "⚠ Pre-D required before treatment",
-    section: "action",
-  },
-];
+interface CheckInPatient {
+  pred_request_id: string;
+  patient_name: string;
+  appointment_time: string;
+  procedure_summary: string;
+  payer_name: string;
+  member_id: string | null;
+  enrollment_months: number | null;
+  provider_name: string;
+  provider_npi: string;
+  insurance_active: boolean;
+  provider_in_network: boolean;
+  deductible_met: boolean;
+  deductible_remaining: number | null;
+  annual_max_remaining_after: number | null;
+  patient_pays_today: number | null;
+  alerts: Alert[];
+  status: "heads_up" | "clear" | "checked_in";
+  checked_in_at: string | null;
+}
 
-const BADGE_CLS: Record<string, string> = {
-  "NEEDS ACTION": "bg-amber-100 text-amber-700",
-  READY: "bg-green-100 text-green-700",
-  "CHECKED IN": "bg-green-100 text-green-700",
+const BADGE: Record<string, { label: string; cls: string }> = {
+  heads_up: { label: "HEADS UP", cls: "bg-amber-100 text-amber-700" },
+  clear: { label: "CLEAR", cls: "bg-green-100 text-green-700" },
+  checked_in: { label: "CHECKED IN", cls: "bg-green-100 text-green-700" },
 };
+
+function money(v: number | null): string {
+  return v == null
+    ? "—"
+    : v.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      });
+}
+
+function timeOf(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 function firstNameOf(full: string): string {
   return full.replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "").split(/\s+/)[0] ?? "";
+}
+
+/** One tile in the dark summary strip. */
+function Tile({
+  ok,
+  title,
+  detail,
+}: {
+  ok: boolean;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div
+      className="flex gap-2 rounded-lg p-2.5"
+      style={
+        ok
+          ? { background: "rgba(255,255,255,0.10)" }
+          : {
+              background: "rgba(255,200,0,0.15)",
+              border: "1px solid rgba(255,200,0,0.3)",
+            }
+      }
+    >
+      <span className="flex-shrink-0 text-[12px]" aria-hidden="true">
+        {ok ? "✅" : "⚠"}
+      </span>
+      <div className="min-w-0">
+        <p
+          className="text-[12px] font-medium"
+          style={{ color: ok ? "#ffffff" : "#fcd34d" }}
+        >
+          {title}
+        </p>
+        <p
+          className="mt-0.5 text-[11px] leading-snug"
+          style={{ color: ok ? "rgba(255,255,255,0.65)" : "rgba(252,211,77,0.8)" }}
+        >
+          {detail}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A one-page summary the patient takes away.
+ *
+ * A new window rather than window.print(), because printing the app
+ * would put the sidebar and today's other patients on paper — other
+ * people's names on a sheet handed to this one.
+ */
+function openPrintWindow(p: CheckInPatient, tenantName: string) {
+  const esc = (v: string) =>
+    v.replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c,
+    );
+  const notes = p.alerts
+    .map(
+      (a) =>
+        `<div style="border-left:3px solid #f59e0b;background:#fffbeb;padding:8px 10px;margin-bottom:6px;border-radius:4px">
+           <div style="font-size:12px;font-weight:600;color:#92400e">${esc(a.title)}</div>
+           <div style="font-size:11px;color:#57534e;margin-top:2px">${esc(a.detail)}</div>
+         </div>`,
+    )
+    .join("");
+
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+    <title>Check-in · ${esc(p.patient_name)}</title>
+    <style>
+      body{font-family:system-ui,sans-serif;background:#f9fafb;margin:0}
+      .card{max-width:420px;margin:30px auto;background:#fff;border-radius:12px;
+            overflow:hidden;border:1px solid #e5e7eb}
+      .hdr{background:${GREEN};color:#fff;padding:16px 20px}
+      .body{padding:18px 20px}
+      td{padding:3px 0;font-size:12px}
+      @media print{.no-print{display:none}body{background:#fff}}
+    </style></head><body>
+    <div class="card">
+      <div class="hdr">
+        <div style="font-size:16px;font-weight:600">${esc(tenantName)}</div>
+        <div style="font-size:11px;opacity:.75">Check-in summary · ${new Date().toLocaleDateString()}</div>
+      </div>
+      <div class="body">
+        <div style="font-size:16px;font-weight:600">${esc(p.patient_name)}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:3px">
+          ${esc(p.procedure_summary)} · ${esc(p.appointment_time)} · ${esc(p.provider_name)}
+        </div>
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:8px">Insurance status</div>
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#6b7280">Plan</td><td style="font-weight:500">${esc(p.payer_name)}</td></tr>
+            <tr><td style="color:#6b7280">Member</td><td style="font-weight:500">${esc(p.member_id ?? "—")}</td></tr>
+            <tr><td style="color:#6b7280">Status</td><td style="color:#16a34a;font-weight:500">Active</td></tr>
+            <tr><td style="color:#6b7280">Network</td><td style="color:#16a34a;font-weight:500">In-network</td></tr>
+            ${
+              p.deductible_remaining != null && p.deductible_remaining > 0
+                ? `<tr><td style="color:#6b7280">Deductible</td><td style="font-weight:500">${money(p.deductible_remaining)} still to meet</td></tr>`
+                : ""
+            }
+          </table>
+        </div>
+        ${
+          notes
+            ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+                 <div style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;margin-bottom:8px">Before your appointment</div>
+                 ${notes}
+               </div>`
+            : ""
+        }
+        <div style="margin-top:14px;padding:12px;background:#f0fdf4;border-radius:8px;font-size:12px;color:#374151;font-style:italic">
+          A treatment coordinator will review your full cost estimate and answer
+          any questions shortly. Figures are an estimate based on current
+          benefits and may change.
+        </div>
+      </div>
+    </div>
+    <div class="no-print" style="text-align:center;margin:16px">
+      <button onclick="window.print()" style="background:${GREEN};color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600">Print ↓</button>
+    </div></body></html>`;
+
+  const w = window.open("", "_blank", "width=520,height=680");
+  if (!w) return false;
+  w.document.write(html);
+  w.document.close();
+  return true;
+}
+
+function PatientCard({
+  p,
+  tenantName,
+  localTime,
+  busy,
+  onCheckIn,
+  onPrintBlocked,
+}: {
+  p: CheckInPatient;
+  tenantName: string;
+  localTime?: string;
+  busy: boolean;
+  onCheckIn: () => void;
+  onPrintBlocked: () => void;
+}) {
+  const at = p.checked_in_at ? timeOf(p.checked_in_at) : localTime;
+  const done = Boolean(at);
+  const badge = BADGE[done ? "checked_in" : p.status] ?? BADGE.clear;
+  const heads = p.alerts.length > 0;
+
+  return (
+    <article className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white">
+      <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
+        <span
+          aria-hidden="true"
+          className="h-2 w-2 flex-shrink-0 rounded-full"
+          style={{ backgroundColor: done || !heads ? "#16a34a" : "#d97706" }}
+        />
+        <span className="text-sm font-semibold text-slate-800">
+          {p.patient_name}
+        </span>
+        <span className="text-sm text-slate-500">
+          {p.procedure_summary} · {p.appointment_time}
+        </span>
+        <span
+          className={`ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-bold ${badge.cls}`}
+        >
+          {badge.label}
+        </span>
+      </div>
+
+      {/* Dark strip: the four facts, impossible to scroll past. */}
+      <div className="mt-3 px-5 py-3.5" style={{ background: GREEN }}>
+        <p className="text-[10px] uppercase tracking-wider text-white/55">
+          At a glance
+        </p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <Tile
+            ok={p.insurance_active}
+            title="Insurance active"
+            detail={`${p.payer_name}${p.member_id ? ` · member ${p.member_id}` : ""}${
+              p.enrollment_months ? ` · enrolled ${p.enrollment_months} months` : ""
+            }`}
+          />
+          <Tile
+            ok={p.provider_in_network}
+            title="Provider in-network"
+            detail={`${p.provider_name} · NPI ${p.provider_npi} · verified`}
+          />
+          {/* Not "deductible met" unless it is. The API returns the
+              amount outstanding and this says so — a patient told the
+              deductible is met, then billed for it, is the complaint
+              this avoids. */}
+          <Tile
+            ok={p.deductible_met}
+            title={p.deductible_met ? "Deductible met" : "Deductible outstanding"}
+            detail={
+              p.deductible_met
+                ? "Nothing more owed on the deductible"
+                : `${money(p.deductible_remaining)} still to meet this year`
+            }
+          />
+          {heads ? (
+            <Tile
+              ok={false}
+              title={`${p.alerts.length} item${p.alerts.length > 1 ? "s" : ""} need attention`}
+              detail={p.alerts.map((a) => a.title).join(" · ")}
+            />
+          ) : (
+            <Tile
+              ok
+              title="All clear — ready to check in"
+              detail="No issues for today's visit"
+            />
+          )}
+        </div>
+      </div>
+
+      {heads && (
+        <div className="px-5 pt-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-amber-600">
+            Before check-in
+          </p>
+          <div className="mt-2 space-y-2">
+            {p.alerts.map((a) => (
+              <div
+                key={a.type}
+                className="rounded border-l-4 border-l-amber-400 bg-amber-50 px-3 py-2"
+              >
+                <p className="text-[13px] font-semibold text-amber-900">
+                  {a.title}
+                </p>
+                <p className="mt-0.5 text-sm text-slate-600">{a.detail}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[12.5px] italic text-slate-400">
+            A treatment coordinator will review the full cost estimate with{" "}
+            {firstNameOf(p.patient_name)} shortly.
+          </p>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 px-5 py-4">
+        <button
+          type="button"
+          onClick={onCheckIn}
+          disabled={done || busy}
+          className="cursor-pointer rounded-lg border-none px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ backgroundColor: GREEN }}
+        >
+          {done
+            ? `Checked in at ${at}`
+            : busy
+              ? "Checking in…"
+              : "Check in patient ✓"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (!openPrintWindow(p, tenantName)) onPrintBlocked();
+          }}
+          className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
+        >
+          Print for patient
+        </button>
+      </div>
+    </article>
+  );
 }
 
 function StatCard({
@@ -150,101 +362,64 @@ function StatCard({
   );
 }
 
-function PatientCard({
-  patient,
-  checkedInAt,
-  onCheckIn,
-}: {
-  patient: Patient;
-  checkedInAt?: string;
-  onCheckIn: () => void;
-}) {
-  const done = Boolean(checkedInAt);
-  const badge = done ? "CHECKED IN" : patient.badge;
-  return (
-    <article className="mb-3 rounded-xl border border-gray-200 bg-white p-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          aria-hidden="true"
-          className="h-2 w-2 flex-shrink-0 rounded-full"
-          style={{ backgroundColor: done ? DOT_GREEN : patient.dot }}
-        />
-        <span className="text-sm font-medium text-slate-800">
-          {patient.name}
-        </span>
-        <span className="text-sm text-slate-500">· {patient.meta}</span>
-        <span
-          className={`ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-bold ${BADGE_CLS[badge]}`}
-        >
-          {badge}
-        </span>
-      </div>
-
-      <p className="mt-2 pl-4 text-sm text-slate-700">
-        <span className="font-medium">Key finding:</span> {patient.finding}
-      </p>
-      {/* Green and labelled "AI suggests" because it is the one line
-          the engine did not produce — it is a reading of the findings,
-          not a signal. Keeping it visually distinct is what stops it
-          being repeated to a patient as though it were policy. */}
-      <p className="mt-1 pl-4 text-sm" style={{ color: GREEN }}>
-        <span className="font-medium">AI suggests:</span> &ldquo;
-        {patient.suggest}&rdquo;
-      </p>
-      <p className="mt-1 pl-4 text-sm text-slate-400">
-        <span className="font-medium">Based on:</span> {patient.basedOn}
-      </p>
-      <p className="mt-1 pl-4 text-sm text-amber-600">
-        {patient.queue}
-        {patient.sla ? ` · ${patient.sla}` : ""}
-      </p>
-
-      <div className="mt-3 flex flex-wrap gap-2 pl-4">
-        <button
-          type="button"
-          onClick={onCheckIn}
-          disabled={done}
-          className="cursor-pointer rounded-lg border-none px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-          style={{ backgroundColor: GREEN }}
-        >
-          {done ? `Checked in at ${checkedInAt}` : "Check in patient ✓"}
-        </button>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
-        >
-          Print estimate
-        </button>
-      </div>
-    </article>
-  );
-}
-
 export default function CheckIn() {
   const { effectiveUser, role } = useAuth();
-
-  const [checkedIn, setCheckedIn] = useState<Set<string>>(new Set());
-  const [checkedInTime, setCheckedInTime] = useState<Record<string, string>>({});
+  const { isDemo } = useDemo();
+  const queryClient = useQueryClient();
   const [toast, setToast] = useState<string | null>(null);
+  // Demo mode cannot write, so its check-ins live here instead.
+  const [localCheckIn, setLocalCheckIn] = useState<Record<string, string>>({});
 
-  const open = PATIENTS.filter((p) => !checkedIn.has(p.id));
-  const action = open.filter((p) => p.section === "action");
-  const ready = open.filter((p) => p.section === "ready");
-  const seen = PATIENTS.filter((p) => checkedIn.has(p.id));
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["checkin", "today"],
+    queryFn: async () => (await api.get<CheckInPatient[]>("/checkin/today")).data,
+    refetchInterval: 30_000,
+  });
+  const patients = Array.isArray(data) ? data : [];
 
-  function handleCheckIn(id: string, name: string) {
-    const time = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    setCheckedIn((prev) => new Set([...prev, id]));
-    setCheckedInTime((prev) => ({ ...prev, [id]: time }));
-    setToast(`${name} checked in ✓`);
+  function flash(msg: string) {
+    setToast(msg);
     window.setTimeout(() => setToast(null), 3000);
   }
 
+  const checkInMutation = useMutation({
+    mutationFn: async (p: CheckInPatient) => {
+      await api.post("/checkin", {
+        pred_request_id: p.pred_request_id,
+        patient_name: p.patient_name,
+      });
+    },
+    onSuccess: (_r, p) => {
+      void queryClient.invalidateQueries({ queryKey: ["checkin", "today"] });
+      flash(`${p.patient_name} checked in ✓`);
+    },
+    onError: (_e, p) => flash(`Could not check ${p.patient_name} in`),
+  });
+
+  function checkIn(p: CheckInPatient) {
+    if (isDemo) {
+      // No write in demo mode — the API refuses it, correctly.
+      setLocalCheckIn((prev) => ({
+        ...prev,
+        [p.pred_request_id]: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      }));
+      flash(`${p.patient_name} checked in ✓ (demo — not saved)`);
+      return;
+    }
+    checkInMutation.mutate(p);
+  }
+
+  const isDone = (p: CheckInPatient) =>
+    p.status === "checked_in" || Boolean(localCheckIn[p.pred_request_id]);
+  const headsUp = patients.filter((p) => p.status === "heads_up" && !isDone(p));
+  const clear = patients.filter((p) => p.status === "clear" && !isDone(p));
+  const seen = patients.filter(isDone);
+
   const firstName = firstNameOf(effectiveUser?.name ?? "");
+  const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
 
   return (
     <div className="relative min-h-full pb-16">
@@ -257,64 +432,113 @@ export default function CheckIn() {
             <p className="mt-0.5 text-[13px] text-slate-500">
               {role ? ROLE_LABELS[role] : ""}
               {role && " · "}
-              {effectiveUser?.tenant_name ?? "Accord Dental"}
+              {tenantName}
             </p>
           </div>
-          <span className="rounded-full bg-amber-50 px-3 py-1 text-[12px] font-semibold text-amber-700">
-            {action.length} need action
-          </span>
+          {!isLoading && (
+            <span
+              className={`rounded-full px-3 py-1 text-[12px] font-semibold ${
+                headsUp.length > 0
+                  ? "bg-amber-50 text-amber-700"
+                  : "bg-green-50 text-green-700"
+              }`}
+            >
+              {headsUp.length > 0
+                ? `⚠ ${headsUp.length} heads up`
+                : "✅ All clear"}
+            </span>
+          )}
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-3">
           <StatCard
-            label="Need my action"
-            value={action.length}
-            tone="text-red-600"
+            label="Heads up"
+            value={headsUp.length}
+            tone="text-amber-600"
           />
+          <StatCard label="Clear" value={clear.length} tone="text-green-600" />
           <StatCard
             label="Checked in"
-            value={checkedIn.size}
-            tone="text-green-600"
+            value={seen.length}
+            tone="text-slate-400"
           />
-          {/* Zero, and it stays zero: there is no "treatment complete"
-              state anywhere in dental-os to count. */}
-          <StatCard label="Done" value={0} tone="text-slate-400" />
         </div>
 
-        {action.length > 0 && (
+        {isLoading && (
+          <div className="mt-6 space-y-3">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="animate-pulse rounded-xl border border-gray-200 bg-white p-5"
+              >
+                <div className="h-3 w-52 rounded bg-gray-100" />
+                <div className="mt-3 h-20 rounded-lg bg-gray-100" />
+                <div className="mt-3 h-8 w-40 rounded bg-gray-100" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {isError && !isLoading && (
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-5">
+            <p className="text-[13.5px] font-medium text-red-700">
+              Could not load today&rsquo;s patients.
+            </p>
+            <p className="mt-1 text-[12.5px] text-red-600">
+              The dental-os API did not answer.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="mt-3 rounded-lg border border-red-300 px-3 py-1.5 text-[12.5px] font-medium text-red-700 transition hover:bg-red-100"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!isLoading && !isError && patients.length === 0 && (
+          <p className="mt-6 rounded-xl border border-gray-200 bg-white p-5 text-[13px] text-slate-500">
+            No patients scheduled for today.
+          </p>
+        )}
+
+        {headsUp.length > 0 && (
           <section className="mt-6">
             <h2 className="mb-3 text-sm font-semibold text-slate-600">
-              NEED MY ACTION ({action.length})
+              ⚠ HEADS UP BEFORE CHECK-IN ({headsUp.length})
             </h2>
-            {action.map((p) => (
+            {headsUp.map((p) => (
               <PatientCard
-                key={p.id}
-                patient={p}
-                onCheckIn={() => handleCheckIn(p.id, p.name)}
+                key={p.pred_request_id}
+                p={p}
+                tenantName={tenantName}
+                busy={checkInMutation.isPending}
+                onCheckIn={() => checkIn(p)}
+                onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
             ))}
           </section>
         )}
 
-        {ready.length > 0 && (
+        {clear.length > 0 && (
           <section className="mt-6">
             <h2 className="mb-3 text-sm font-semibold text-slate-600">
-              READY TO CHECK IN ({ready.length})
+              ✅ CLEAR TO CHECK IN ({clear.length})
             </h2>
-            {ready.map((p) => (
+            {clear.map((p) => (
               <PatientCard
-                key={p.id}
-                patient={p}
-                onCheckIn={() => handleCheckIn(p.id, p.name)}
+                key={p.pred_request_id}
+                p={p}
+                tenantName={tenantName}
+                busy={checkInMutation.isPending}
+                onCheckIn={() => checkIn(p)}
+                onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
             ))}
           </section>
         )}
 
-        {/* Checked-in patients stay on screen. Removing the card the
-            moment you click is how a receptionist ends up asking "did
-            that register?" three seconds after the toast has gone —
-            and it is the only place the recorded time is visible. */}
         {seen.length > 0 && (
           <section className="mt-6">
             <h2 className="mb-3 text-sm font-semibold text-slate-600">
@@ -322,30 +546,28 @@ export default function CheckIn() {
             </h2>
             {seen.map((p) => (
               <PatientCard
-                key={p.id}
-                patient={p}
-                checkedInAt={checkedInTime[p.id]}
-                onCheckIn={() => handleCheckIn(p.id, p.name)}
+                key={p.pred_request_id}
+                p={p}
+                tenantName={tenantName}
+                localTime={localCheckIn[p.pred_request_id]}
+                busy={false}
+                onCheckIn={() => checkIn(p)}
+                onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
             ))}
           </section>
         )}
 
-        {open.length === 0 && (
-          <p className="mt-6 rounded-xl border border-green-200 bg-green-50 p-4 text-[13px] text-green-800">
-            Everyone is checked in ✓
+        {patients.length > 0 && (
+          <p className="mt-6 text-[11px] leading-relaxed text-gray-400">
+            Live from dental-os, refreshed every 30 seconds. Appointment times
+            are illustrative — there is no schedule in dental-os yet.
+            {isDemo &&
+              " In demo mode a check-in is not saved: the API refuses writes without a sign-in."}
           </p>
         )}
-
-        <p className="mt-6 text-[11px] leading-relaxed text-gray-400">
-          Five patients, read from the API on 7 Aug 2026. The appointment
-          times are illustrative — there is no schedule in dental-os yet, and
-          check-in is remembered in this tab only.
-        </p>
       </div>
 
-      {/* Anchored to this page rather than the viewport, so it cannot
-          land under the mobile tab bar. */}
       {toast && (
         <div
           role="status"
