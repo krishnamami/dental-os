@@ -10,7 +10,7 @@
  * shell from re-mounting (and re-fetching) on every navigation.
  */
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Eye, LogOut } from "lucide-react";
+import { Eye } from "lucide-react";
 
 import { ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { useDemoLink } from "../hooks/useDemo";
@@ -44,6 +44,7 @@ export default function AppShell() {
     isDemo,
     effectiveUser,
     viewAs,
+    navAllows,
     navOrder,
     stopImpersonating,
     logout,
@@ -134,16 +135,7 @@ export default function AppShell() {
                     : ""}
                 </p>
               </div>
-              {!isDemo && (
-                <button
-                  type="button"
-                  onClick={signOutAndLeave}
-                  aria-label="Sign out"
-                  className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                >
-                  <LogOut size={14} />
-                </button>
-              )}
+
             </div>
           </div>
         </aside>
@@ -160,12 +152,34 @@ export default function AppShell() {
               <span className="hidden rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600 sm:inline">
                 {tenantName}
               </span>
-              <Link
-                to={demoLink("/workbench")}
-                className="rounded-lg bg-accord-green-900 px-3 py-1.5 text-[12.5px] font-medium text-white transition hover:bg-accord-green-700"
-              >
-                New pre-D
-              </Link>
+              {/* "New pre-D" only for roles that hold the workbench —
+                  a front desk cannot start one, and a button that
+                  bounces them is worse than no button. */}
+              {navAllows("Pre-D Workbench") && (
+                <Link
+                  to={demoLink("/workbench")}
+                  className="rounded-lg bg-accord-green-900 px-3 py-1.5 text-[12.5px] font-medium text-white transition hover:bg-accord-green-700"
+                >
+                  New pre-D
+                </Link>
+              )}
+
+              <span className="hidden text-sm text-slate-500 lg:inline">
+                {effectiveUser?.name}
+                {role ? ` · ${ROLE_LABELS[role]}` : ""}
+              </span>
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-semibold text-green-700">
+                {initials(effectiveUser?.name ?? "?")}
+              </span>
+              {!isDemo && (
+                <button
+                  type="button"
+                  onClick={signOutAndLeave}
+                  className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-500 transition hover:bg-slate-50"
+                >
+                  Sign out
+                </button>
+              )}
             </div>
           </header>
 
