@@ -1,10 +1,14 @@
 /**
  * C-03 — the signed-in chrome.
  *
- * Sidebar on desktop, bottom tab bar on mobile, 48px top bar on both.
- * Nav items are WORKFLOW_NAV filtered by the role's gates, so a
- * dentist and a front desk get genuinely different products rather
- * than the same page with things hidden.
+ * One header bar, full-width content. The left sidebar is gone for
+ * every role; a horizontal product bar replaces it.
+ *
+ * ⚠ DESKTOP HAS NO PRODUCT NAVIGATION UNTIL THAT BAR LANDS. A dentist
+ * holds five products and can currently reach four of them only by
+ * typing the URL. The mobile tab bar below is kept for exactly that
+ * reason — removing it too would leave the app with no way to move
+ * between products at all.
  *
  * Wraps every protected route via <Outlet />, which is what keeps the
  * shell from re-mounting (and re-fetching) on every navigation.
@@ -14,7 +18,7 @@ import { Eye } from "lucide-react";
 
 import { ROLE_LABELS, useAuth } from "../context/AuthContext";
 import { useDemoLink } from "../hooks/useDemo";
-import { WORKFLOW_NAV, titleForPath, type NavItem } from "../routes";
+import { WORKFLOW_NAV, type NavItem } from "../routes";
 import DemoBanner from "./DemoBanner";
 import { AccordLogo } from "./AccordLogo";
 
@@ -28,7 +32,7 @@ function isActive(item: NavItem, pathname: string) {
 }
 
 /** Initials from a person's name — "Dr. Sridhar Chinta" -> "SC".
- *  Titles are dropped: a sidebar full of "DS" tells you nothing. */
+ *  Titles are dropped: a row of "DS" tells you nothing. */
 function initials(name: string): string {
   const parts = name
     .replace(/^(Dr|Mr|Mrs|Ms)\.?\s+/i, "")
@@ -44,7 +48,6 @@ export default function AppShell() {
     isDemo,
     effectiveUser,
     viewAs,
-    navAllows,
     navOrder,
     stopImpersonating,
     logout,
@@ -53,13 +56,11 @@ export default function AppShell() {
   const navigate = useNavigate();
   const demoLink = useDemoLink();
 
-  // One list of seven, filtered and ORDERED by the role. navOrder is
-  // ROLE_NAV, so a DSO owner opens on Portfolio and a treatment
-  // coordinator on Check-in without a second table deciding it.
+  // Still the role's own list, still in the role's own order — it just
+  // has one place left to render, the mobile tab bar.
   const items: NavItem[] = navOrder
     .map((gate) => WORKFLOW_NAV.find((w) => w.gate === gate))
     .filter((w): w is NavItem => Boolean(w));
-  const title = titleForPath(pathname);
   const tenantName = effectiveUser?.tenant_name ?? "Accord Dental";
 
   function signOutAndLeave() {
@@ -69,127 +70,64 @@ export default function AppShell() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="flex">
-        {/* ── Sidebar (desktop) ───────────────────────────────── */}
-        <aside className="fixed inset-y-0 left-0 hidden w-[200px] flex-col border-r border-gray-200 bg-white lg:flex">
-          <div className="border-b border-gray-200 px-4 py-2.5">
-            <Link to={demoLink("/")} className="inline-flex">
-              <AccordLogo size={24} />
-            </Link>
-            <p className="mt-1 truncate text-[10px] text-slate-400">
-              {tenantName}
-            </p>
-          </div>
+      <DemoBanner />
 
-          {viewAs && (
-            <div className="border-b border-amber-200 bg-amber-50 px-3 py-2">
-              <p className="flex items-center gap-1 text-[10px] font-medium text-amber-800">
-                <Eye size={11} />
-                Viewing as {viewAs.name}
-              </p>
-              <p className="truncate text-[9px] text-amber-600">{tenantName}</p>
-              <button
-                type="button"
-                onClick={() => void stopImpersonating()}
-                className="mt-0.5 text-[9px] text-amber-700 underline hover:text-amber-900"
-              >
-                Stop impersonating
-              </button>
-            </div>
+      <header className="sticky top-0 z-30 flex min-h-[52px] items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-2 sm:px-6">
+        <Link to={demoLink("/")} className="flex min-w-0 flex-col">
+          <AccordLogo size={24} />
+          <span className="mt-0.5 truncate text-[10px] text-slate-400">
+            {tenantName}
+          </span>
+        </Link>
+
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <span className="hidden text-sm text-slate-500 sm:inline">
+            {effectiveUser?.name}
+            {role ? ` · ${ROLE_LABELS[role]}` : ""}
+          </span>
+          {!isDemo && (
+            <button
+              type="button"
+              onClick={signOutAndLeave}
+              className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-500 transition hover:bg-slate-50"
+            >
+              Sign out
+            </button>
           )}
-
-          <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
-            {items.map((item) => {
-              const active = isActive(item, pathname);
-              const Icon = item.icon;
-              return (
-                <NavLink
-                  key={item.label}
-                  to={demoLink(item.to)}
-                  className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition ${
-                    active
-                      ? "bg-accord-green-50 font-medium text-accord-green-900"
-                      : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                  }`}
-                >
-                  <Icon size={16} className="flex-shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </NavLink>
-              );
-            })}
-          </nav>
-
-          <div className="border-t border-gray-200 p-3">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-accord-green-900 text-[11px] font-semibold text-white">
-                {initials(effectiveUser?.name ?? "?")}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[12.5px] font-medium text-gray-900">
-                  {effectiveUser?.name ?? "Signed out"}
-                </p>
-                <p className="truncate text-[11px] text-gray-500">
-                  {role ? ROLE_LABELS[role] : ""}
-                  {effectiveUser?.tenant_name
-                    ? ` · ${effectiveUser.tenant_name}`
-                    : ""}
-                </p>
-              </div>
-
-            </div>
-          </div>
-        </aside>
-
-        {/* ── Content ─────────────────────────────────────────── */}
-        <div className="min-w-0 flex-1 lg:ml-[200px]">
-          <DemoBanner />
-
-          <header className="sticky top-0 z-30 flex min-h-[48px] items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-2 sm:px-6">
-            <h1 className="truncate text-[14px] font-semibold text-gray-900">
-              {title}
-            </h1>
-            <div className="flex items-center gap-2">
-              <span className="hidden rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600 sm:inline">
-                {tenantName}
-              </span>
-              {/* "New pre-D" only for roles that hold the workbench —
-                  a front desk cannot start one, and a button that
-                  bounces them is worse than no button. */}
-              {navAllows("Pre-D Workbench") && (
-                <Link
-                  to={demoLink("/workbench")}
-                  className="rounded-lg bg-accord-green-900 px-3 py-1.5 text-[12.5px] font-medium text-white transition hover:bg-accord-green-700"
-                >
-                  New pre-D
-                </Link>
-              )}
-
-              <span className="hidden text-sm text-slate-500 lg:inline">
-                {effectiveUser?.name}
-                {role ? ` · ${ROLE_LABELS[role]}` : ""}
-              </span>
-              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-semibold text-green-700">
-                {initials(effectiveUser?.name ?? "?")}
-              </span>
-              {!isDemo && (
-                <button
-                  type="button"
-                  onClick={signOutAndLeave}
-                  className="rounded-lg border border-slate-200 px-3 py-1 text-sm text-slate-500 transition hover:bg-slate-50"
-                >
-                  Sign out
-                </button>
-              )}
-            </div>
-          </header>
-
-          {/* Clears the 60px tab bar plus the iOS home indicator, so
-              the last row of a table is never under the user's thumb. */}
-          <main className="pb-[calc(60px+env(safe-area-inset-bottom))] lg:pb-0">
-            <Outlet />
-          </main>
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-green-100 text-[11px] font-semibold text-green-700">
+            {initials(effectiveUser?.name ?? "?")}
+          </span>
         </div>
-      </div>
+      </header>
+
+      {/* Was in the sidebar. It does NOT go with it — "you are looking
+          at someone else's data" is the one banner that must survive a
+          layout change, and it is now full-width instead of tucked in
+          a corner. */}
+      {viewAs && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-200 bg-amber-50 px-4 py-2 sm:px-6">
+          <p className="flex items-center gap-1.5 text-[12px] font-medium text-amber-900">
+            <Eye size={13} />
+            Viewing as {viewAs.name}
+            {role ? ` · ${ROLE_LABELS[role]}` : ""}
+          </p>
+          <span className="text-[11px] text-amber-600">{tenantName}</span>
+          <button
+            type="button"
+            onClick={() => void stopImpersonating()}
+            className="ml-auto rounded-lg border border-amber-300 px-2.5 py-1 text-[11.5px] font-medium text-amber-800 transition hover:bg-amber-100"
+          >
+            Stop impersonating
+          </button>
+        </div>
+      )}
+
+      {/* Full width. No sidebar to clear, so no left margin. The bottom
+          padding still clears the mobile tab bar plus the iOS home
+          indicator, so the last row of a table is never under a thumb. */}
+      <main className="pb-[calc(60px+env(safe-area-inset-bottom))] lg:pb-0">
+        <Outlet />
+      </main>
 
       {/* ── Bottom tabs (mobile) ──────────────────────────────── */}
       <nav
