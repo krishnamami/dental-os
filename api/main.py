@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from api import auth as auth_module
 from api.auth import router as auth_router
@@ -102,6 +103,42 @@ app = FastAPI(
     ),
     lifespan=lifespan,
 )
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Say out loud that nothing this API returns may be stored.
+
+    Every response here is either a patient's live clinical state or a
+    session, and there is no such thing as a safely stale one: a
+    schedule that is one day old shows the wrong patients, and a
+    /auth/me served from a cache outlives the sign-out that was
+    supposed to end it.
+
+    ⚠ WHAT THIS DOES NOT FIX. CloudFront was never the problem — the
+    /api/* behaviour has run on the managed CachingDisabled policy
+    (4135ea2d-6df8-44a3-9df3-4b5a84be39ad) since the ALB was wired up,
+    and every edge response says `X-Cache: Miss from cloudfront`. What
+    was missing is that the API never SAID it was uncacheable, so the
+    guarantee lived entirely in one console setting. A future cache
+    policy, a corporate proxy, or a browser's heuristic freshness on a
+    200 with no Cache-Control could each have re-opened it
+    independently. This makes the origin state its own terms.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate"
+        )
+        # Pragma and Expires are HTTP/1.0 and long superseded, but they
+        # are what an old forward proxy between a practice and the
+        # internet still reads.
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 
 app.include_router(router, prefix=API_PREFIX)
 app.include_router(auth_router, prefix=API_PREFIX)
