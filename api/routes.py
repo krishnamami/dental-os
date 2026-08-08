@@ -312,6 +312,132 @@ def _open_condition_codes(signals: list[dict]) -> list[str]:
 # ─────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────
+# The reviewer's queue.
+#
+# There was no list endpoint for pre-Ds before this — only
+# /decisions/{id} for one at a time — so the workbench and the
+# submission queue both shipped with their rows hardcoded in the TSX.
+# A date picker over a literal array filters nothing, which is why this
+# exists.
+# ─────────────────────────────────────────────────────────────────────
+
+def _queue_finding(conditions: list[str], decision: str | None) -> str:
+    """One line a dentist can act on, from the conditions on the case.
+
+    Ordered by what stops a submission first. "No open findings" is a
+    real answer and must not be dressed up as one.
+    """
+    joined = " ".join(conditions)
+    if "BUNDLING_CONFLICT" in joined:
+        return "Bundling conflict — procedures billed together"
+    if "MISSING" in joined or "XRAY" in joined or "EVIDENCE" in joined:
+        return "Clinical evidence outstanding"
+    if decision == "denied":
+        return "Denied — appeal viability to review"
+    if "PRED_REQUIRED" in joined:
+        return "Pre-determination required before treatment"
+    if "DOWNGRADE" in joined:
+        return "Plan pays at a cheaper material's rate"
+    return "No open findings"
+
+
+@router.get("/decisions/queue")
+async def decisions_queue(
+    request: Request,
+    date_param: str | None = Query(None, alias="date"),
+    claims=Depends(require_claims_or_demo),
+) -> list[dict]:
+    """Pre-Ds scheduled for one day, as a review queue.
+
+    Scoped by the APPOINTMENT, same as the check-in screen: the four
+    persona pages are then all looking at one day's patients rather
+    than at four different definitions of "current".
+
+    Reads pred_states and the current persona bundle. It does NOT run
+    the personas — /checkin/today does, and that is why it takes seven
+    seconds. This is a plain join and stays under a second.
+    """
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    sim, os_pool = _pools(request)
+
+    if date_param:
+        try:
+            appt_date = date.fromisoformat(date_param)
+        except ValueError:
+            raise HTTPException(422, "date must be YYYY-MM-DD")
+    else:
+        appt_date = date.today()
+
+    appts = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT pred_request_id, appointment_time
+        FROM appointments
+        WHERE tenant_id = $1 AND appointment_date = $2
+          AND status <> 'cancelled'
+        ORDER BY appointment_time
+        """,
+        tenant, appt_date,
+    )
+    if not appts:
+        return []
+    order = {r["pred_request_id"]: i for i, r in enumerate(appts)}
+
+    rows = await fetch_with_tenant(
+        sim, tenant,
+        """
+        SELECT pr.pred_request_id,
+               p.first_name || ' ' || p.last_name AS patient_name,
+               pr.payer_id, pr.total_case_value,
+               ps.decision, ps.open_conditions, ps.submission_ready
+        FROM pred_requests pr
+        JOIN patients p ON p.patient_id = pr.patient_id
+        LEFT JOIN pred_states ps
+               ON ps.pred_request_id = pr.pred_request_id
+        WHERE pr.tenant_id = $1 AND pr.pred_request_id = ANY($2::text[])
+        """,
+        tenant, list(order),
+    )
+
+    # One query for every bundle, not one per row. `blocking` is the
+    # count of signals a human must sign off — mode is only ever
+    # 'recommend' or 'human_approval'; there is no auto_execute.
+    bundles = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT pred_request_id, all_signals FROM persona_bundles "
+        "WHERE tenant_id = $1 AND is_current "
+        "  AND pred_request_id = ANY($2::text[])",
+        tenant, list(order),
+    )
+    blocking: dict[str, int] = {}
+    for b in bundles:
+        signals = _json(b["all_signals"], [])
+        blocking[b["pred_request_id"]] = sum(
+            1 for s in signals
+            if isinstance(s, dict) and s.get("mode") == "human_approval"
+        )
+
+    out: list[dict] = []
+    for row in rows:
+        rid = row["pred_request_id"]
+        conditions = _json(row["open_conditions"], [])
+        decision = row["decision"] or "pending"
+        out.append({
+            "id": rid,
+            "patient": row["patient_name"],
+            "finding": _queue_finding(conditions, row["decision"]),
+            "charges": _f(row["total_case_value"]),
+            "payer": _payer_name(row["payer_id"]),
+            "status": decision,
+            "open": len(conditions),
+            "blocking": blocking.get(rid, 0),
+            "submission_ready": bool(row["submission_ready"]),
+        })
+    out.sort(key=lambda x: order.get(x["id"], 99))
+    return out
+
+
 @router.get("/decisions/{pred_request_id}", response_model=DecisionBundleResponse)
 async def get_decision_bundle(
     pred_request_id: str,
@@ -1535,3 +1661,4 @@ async def practice_settings(
             for p in payers
         ],
     }
+
