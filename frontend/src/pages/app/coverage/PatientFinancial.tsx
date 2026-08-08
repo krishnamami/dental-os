@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
 import { useDatePicker } from "../../../hooks/useDatePicker";
@@ -7,6 +7,7 @@ import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
 import type { PatientSummary } from "../../../types/dental";
 import { formatCurrency } from "../../../utils/format";
+import { talkingPoints } from "./talkingPoints";
 import {
   COORDINATOR_ITEMS,
   generateEmailText,
@@ -66,6 +67,25 @@ interface CheckInPatient {
 // One list, shared with the printed document. Two copies would let a
 // coordinator tick six boxes on screen and print six different ones.
 const CHECKLIST = COORDINATOR_ITEMS;
+
+export type CardTab = "talking" | "treatment" | "checklist";
+
+const TAB_ORDER: CardTab[] = ["talking", "treatment", "checklist"];
+
+const TAB_LABEL: Record<CardTab, string> = {
+  talking: "Talking points",
+  treatment: "Treatment & cost",
+  checklist: "Checklist",
+};
+
+/** The three weights a talking point carries. `ok` is the house green,
+ *  `warn` the amber the rest of the app uses for a raised finding, and
+ *  `info` blue for an offer rather than a fact. */
+const TONE: Record<string, { bg: string; bar: string }> = {
+  ok: { bg: "#f8fafc", bar: GREEN },
+  warn: { bg: "#fffbeb", bar: "#d97706" },
+  info: { bg: "#eff6ff", bar: "#3b82f6" },
+};
 
 type Bucket = "ready" | "waiting" | "done";
 
@@ -187,6 +207,8 @@ function PatientCard({
   done,
   onComplete,
   onToast,
+  tab,
+  onTab,
 }: {
   p: CheckInPatient;
   ps?: PatientSummary;
@@ -198,12 +220,15 @@ function PatientCard({
   done: boolean;
   onComplete: () => void;
   onToast: (m: string) => void;
+  tab: CardTab;
+  onTab: (t: CardTab) => void;
 }) {
   // No navigate/demoLink here any more. The card no longer routes
   // anywhere — the coordinator's work ends on this screen.
   const heads = p.alerts.length > 0;
   const downgrade = ps?.procedures.find((x) => x.downgrade_applied);
   const progress = checked.size;
+  const points = useMemo(() => talkingPoints(p, ps), [p, ps]);
 
   return (
     <article className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -278,6 +303,91 @@ function PatientCard({
 
       {ps && (
         <>
+          {/* ── Tabs ─────────────────────────────────────────── */}
+          <nav
+            className="flex border-b border-gray-200 bg-white"
+            aria-label={`${p.patient_name} sections`}
+          >
+            {TAB_ORDER.map((t) => {
+              const on = tab === t;
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => onTab(t)}
+                  aria-current={on ? "page" : undefined}
+                  className="cursor-pointer border-b-2 px-[18px] py-[11px] text-[12px] transition"
+                  style={{
+                    borderBottomColor: on ? GREEN : "transparent",
+                    color: on ? GREEN : "#6b7280",
+                    fontWeight: on ? 600 : 500,
+                  }}
+                >
+                  {TAB_LABEL[t]}
+                  {t === "checklist" && (
+                    <span className="ml-1.5 text-[11px] font-normal text-slate-400">
+                      {progress}/{CHECKLIST.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* ── Talking points ───────────────────────────────── */}
+          {tab === "talking" && (
+            <div className="px-5 pt-4">
+              <p className="text-[13px] font-semibold text-slate-800">
+                What to cover with {firstNameOf(p.patient_name)}
+              </p>
+              <div className="mt-2.5">
+                {points.map((tp, i) => (
+                  <div
+                    key={tp.key}
+                    className="mb-[7px] flex gap-[10px] rounded-[7px] p-[10px]"
+                    style={{
+                      background: TONE[tp.tone].bg,
+                      borderLeft: `3px solid ${TONE[tp.tone].bar}`,
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                      style={{ background: TONE[tp.tone].bar }}
+                    >
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="mb-[3px] text-[12px] font-semibold text-[#111111]">
+                        {tp.label}
+                      </p>
+                      <p className="text-[12px] italic leading-[1.55] text-[#374151]">
+                        {tp.script}
+                      </p>
+                      {tp.note && (
+                        // Not italic and visually apart, because this is
+                        // the one line on the card that must NOT be read
+                        // to the patient.
+                        <p
+                          className="mt-[5px] rounded px-2 py-[5px] text-[11px] not-italic text-[#6b7280]"
+                          style={{ background: "rgba(0,0,0,0.04)" }}
+                        >
+                          {tp.note}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">
+                Derived from this patient&rsquo;s own coverage — the amber
+                points appear only when the engine raised them.
+              </p>
+            </div>
+          )}
+
+          {/* ── Treatment & cost ─────────────────────────────── */}
+          {tab === "treatment" && (
           <div className="px-5 pt-4">
             <p className="text-[13px] font-semibold text-slate-800">
               Treatment plan · {ps.patient_name}
@@ -365,8 +475,12 @@ function PatientCard({
               />
             </div>
           </div>
+          )}
 
-          {heads && (
+          {/* The engine's raw alerts stay with the money, not with the
+              scripts: the talking points already say these things in
+              words a patient hears. */}
+          {tab === "treatment" && heads && (
             <div className="px-5 pt-4">
               <p className="text-xs font-bold uppercase tracking-wide text-amber-600">
                 Important notes
@@ -387,6 +501,7 @@ function PatientCard({
             </div>
           )}
 
+          {tab === "checklist" && (
           <div className="px-5 pt-4">
             <div className="flex items-baseline justify-between gap-2">
               <p className="text-[13px] font-semibold text-slate-800">
@@ -428,8 +543,12 @@ function PatientCard({
               ))}
             </ul>
           </div>
+          )}
 
-          <div className="flex flex-wrap gap-2 px-5 py-4">
+          {/* Below the tabs, always. Whichever tab is open, the three
+              things the coordinator does at the end of the conversation
+              have to be one click away. */}
+          <div className="flex flex-wrap gap-2 border-t border-gray-100 px-5 py-4">
             <button
               type="button"
               onClick={onComplete}
@@ -479,6 +598,9 @@ export default function PatientFinancial() {
   const [filter, setFilter] = useState<Bucket | "all">("all");
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [checks, setChecks] = useState<Record<string, Set<number>>>({});
+  // Per patient, so opening the cost table on one card does not move
+  // every other card off its scripts.
+  const [tabs, setTabs] = useState<Record<string, CardTab>>({});
   const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
 
   // Same key shape as the check-in screen, date included: the two pages
@@ -566,6 +688,10 @@ export default function PatientFinancial() {
                 flash(`Consultation complete ✓ — ${p.patient_name}`);
               }}
               onToast={flash}
+              tab={tabs[p.pred_request_id] ?? "talking"}
+              onTab={(t) =>
+                setTabs((prev) => ({ ...prev, [p.pred_request_id]: t }))
+              }
             />
           );
         })}
