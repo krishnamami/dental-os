@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 
-import { useConditions, useDecision } from "../hooks/useApi";
+import { api, useConditions, useDecision } from "../hooks/useApi";
 import { useDemoLink } from "../hooks/useDemo";
 import ReadinessBadge from "./ReadinessBadge";
 import { scenarioId } from "../utils/format";
@@ -14,19 +15,28 @@ import { scenarioId } from "../utils/format";
  * expand rather than up front — five collapsed rows should not fire
  * five requests nobody asked for.
  *
- * The ready rows are DA-U01..U05, Group U, which the corpus builds as
- * uncontested single-code approvals. They are labelled "sample"
- * because there is no queue endpoint: dental-os answers per pre-D, so
- * a real list would be one request each. Their names and procedures
- * are real; their readiness is not fetched.
+ * Both sections are live now and both are scoped to the selected day.
+ * GET /decisions/queue?date= replaced the hardcoded READY_ROWS — it
+ * says per case whether it is submission_ready, which is precisely the
+ * blocked/ready split this screen draws. The rows used to be labelled
+ * "sample" because dental-os answered per pre-D and a real list would
+ * have been one request each; it now answers the list in one.
+ *
+ * Note DA-U02 was "Angela Brooks" in that hardcoded list. The corpus
+ * says Maria Santos. Nothing is typed here any more, so it says what
+ * the database says.
  */
-const READY_ROWS = [
-  { id: "PRED-SIM-DA-U01", patient: "Robert Thompson", proc: "D1110 prophylaxis" },
-  { id: "PRED-SIM-DA-U02", patient: "Angela Brooks", proc: "D0274 bitewings" },
-  { id: "PRED-SIM-DA-U03", patient: "Kevin Lee", proc: "D2391 composite" },
-  { id: "PRED-SIM-DA-U04", patient: "Dorothy Chen", proc: "D7140 extraction" },
-  { id: "PRED-SIM-DA-U05", patient: "Frank Wilson", proc: "D4910 perio maint." },
-];
+interface QueueRow {
+  id: string;
+  patient: string;
+  finding: string;
+  charges: number;
+  payer: string;
+  status: string;
+  open: number;
+  blocking: number;
+  submission_ready: boolean;
+}
 
 function BlockedRow({ predRequestId }: { predRequestId: string }) {
   const [open, setOpen] = useState(false);
@@ -124,33 +134,54 @@ function BlockedRow({ predRequestId }: { predRequestId: string }) {
   );
 }
 
-export default function SubmissionQueue() {
+export default function SubmissionQueue({ date }: { date: string }) {
   const demoLink = useDemoLink();
   const [notice, setNotice] = useState("");
+
+  // Same query key the workbench uses, so switching between the two
+  // screens on one date is a cache hit rather than a second request.
+  const { data, isLoading } = useQuery({
+    queryKey: ["decisions", "queue", date],
+    queryFn: async () =>
+      (await api.get<QueueRow[]>(`/decisions/queue?date=${encodeURIComponent(date)}`))
+        .data,
+    staleTime: 60_000,
+  });
+  const rows: QueueRow[] = Array.isArray(data) ? data : [];
+  const blocked = rows.filter((r) => !r.submission_ready);
+  const ready = rows.filter((r) => r.submission_ready);
 
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
         <header className="border-b border-gray-200 bg-gray-50 px-4 py-3">
           <h2 className="text-[13.5px] font-semibold text-gray-900">
-            Blocked — needs action
+            Blocked — needs action ({blocked.length})
           </h2>
         </header>
         <ul>
-          <BlockedRow predRequestId="PRED-SIM-DA-A01" />
-          <BlockedRow predRequestId="PRED-SIM-DA-C01" />
+          {blocked.map((r) => (
+            <BlockedRow key={r.id} predRequestId={r.id} />
+          ))}
         </ul>
+        {!isLoading && blocked.length === 0 && (
+          <p className="px-4 py-3 text-[12.5px] text-gray-500">
+            Nothing blocked on this day.
+          </p>
+        )}
       </section>
 
       <section className="overflow-hidden rounded-xl border border-gray-200 bg-white">
         <header className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
           <h2 className="text-[13.5px] font-semibold text-gray-900">
-            Ready to submit
+            Ready to submit ({ready.length})
           </h2>
-          <span className="text-[11px] text-gray-400">sample rows</span>
+          <span className="text-[11px] text-gray-400">
+            {isLoading ? "loading…" : "live"}
+          </span>
         </header>
         <ul className="divide-y divide-gray-100">
-          {READY_ROWS.map((r) => (
+          {ready.map((r) => (
             <li
               key={r.id}
               className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -160,7 +191,7 @@ export default function SubmissionQueue() {
                   {r.patient}
                 </p>
                 <p className="mt-0.5 text-[11.5px] text-gray-500">
-                  {r.proc} · {scenarioId(r.id)}
+                  {r.finding} · {scenarioId(r.id)}
                 </p>
               </div>
               <div className="flex flex-shrink-0 items-center gap-2">
@@ -184,6 +215,11 @@ export default function SubmissionQueue() {
             </li>
           ))}
         </ul>
+        {!isLoading && ready.length === 0 && (
+          <p className="px-4 py-3 text-[12.5px] text-gray-500">
+            Nothing ready to submit on this day.
+          </p>
+        )}
         {notice && (
           <p className="border-t border-gray-100 px-4 py-2.5 text-[12px] text-accord-amber-900">
             {notice}

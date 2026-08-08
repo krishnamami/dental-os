@@ -1,10 +1,8 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import SchedulePicker, {
-  todayIso,
-  useScheduleDates,
-} from "../../../components/SchedulePicker";
+import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
+import { useDatePicker } from "../../../hooks/useDatePicker";
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
 import type { PatientSummary } from "../../../types/dental";
@@ -481,8 +479,7 @@ export default function PatientFinancial() {
   const [filter, setFilter] = useState<Bucket | "all">("all");
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [checks, setChecks] = useState<Record<string, Set<number>>>({});
-  const [selectedDate, setSelectedDate] = useState<string>(todayIso());
-  const dates = useScheduleDates(selectedDate);
+  const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
 
   // Same key shape as the check-in screen, date included: the two pages
   // read the same endpoint, and a key without the date would have one
@@ -595,10 +592,10 @@ export default function PatientFinancial() {
               {practice}
             </p>
           </div>
-          <SchedulePicker
-            value={selectedDate}
+          <DatePickerDropdown
+            selectedDate={selectedDate}
+            availableDates={availableDates}
             onChange={setSelectedDate}
-            dates={dates}
           />
         </div>
 

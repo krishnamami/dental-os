@@ -1,7 +1,11 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 
+import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
 import PreDDetail from "../../../components/PreDDetail";
+import { useDatePicker } from "../../../hooks/useDatePicker";
+import { api } from "../../../hooks/useApi";
 import { formatCurrencyShort } from "../../../utils/format";
 
 /**
@@ -11,20 +15,19 @@ import { formatCurrencyShort } from "../../../utils/format";
  * `selectedId` is the only state that matters — it drives all three
  * queries, and nothing on the right is reachable except through it.
  *
- * ── On the queue being static ────────────────────────────────────────
+ * ── The queue is live now ────────────────────────────────────────────
  *
- * There is still no list endpoint. dental-os answers per pre-D, so a
- * genuinely live queue would be eight round trips on mount — and in
- * production there is no API behind CloudFront at all, so all eight
- * would fail and the fallback is what every visitor actually sees.
+ * It used to be a hardcoded snapshot, because dental-os answered per
+ * pre-D and a real list would have been eight round trips on mount.
+ * GET /decisions/queue?date= replaced that: one request, one join, no
+ * persona runs, under a second.
  *
- * So the rows below are a SNAPSHOT, not an invention: every name,
- * decision, dollar figure and payer was read from
- * `GET /decisions/{id}` and `/patient-summary` on 2026-08-06 and copied
- * verbatim. When the API is reachable the selected row's header
- * upgrades to live values, and the "live"/"snapshot" chip says which
- * you are looking at. If a snapshot value ever disagrees with the live
- * one, the snapshot is stale and this list is what needs updating.
+ * It is scoped by APPOINTMENT DATE, which is what puts this screen on
+ * the same day as check-in and the coordinator's screen. A consequence
+ * worth knowing: the queue is now the day's SCHEDULED pre-Ds, so cases
+ * that were in the old hardcoded list but are not booked (C10, B01,
+ * U03) no longer appear. A dentist reviewing an unscheduled case
+ * reaches it by URL, as before.
  */
 
 type Status = "approved" | "pended" | "denied";
@@ -42,88 +45,9 @@ interface QueueRow {
   blocking: number;
 }
 
-const QUEUE: QueueRow[] = [
-  {
-    id: "PRED-SIM-DA-A01",
-    patient: "James Mitchell",
-    finding: "Bundling conflict · D7953 + D6010",
-    charges: 5550,
-    payer: "Delta Dental PPO",
-    status: "pended",
-    open: 8,
-    blocking: 3,
-  },
-  {
-    id: "PRED-SIM-DA-B04",
-    patient: "Carlos Rivera",
-    finding: "Appeal viable · 65% success probability",
-    charges: 3750,
-    payer: "Delta Dental PPO",
-    status: "pended",
-    open: 7,
-    blocking: 3,
-  },
-  {
-    id: "PRED-SIM-DA-C10",
-    patient: "John Miller",
-    finding: "OIG excluded provider",
-    charges: 1190,
-    payer: "Delta Dental PPO",
-    status: "pended",
-    open: 6,
-    blocking: 5,
-  },
-  {
-    id: "PRED-SIM-DA-B01",
-    patient: "Patricia Johnson",
-    finding: "Hard exclusion · implants not covered",
-    charges: 4600,
-    payer: "Delta Dental PPO",
-    status: "denied",
-    open: 7,
-    blocking: 2,
-  },
-  {
-    id: "PRED-SIM-DA-D04",
-    patient: "Linda Taylor",
-    finding: "Crown D2740 → D2750 downgrade",
-    charges: 1650,
-    payer: "Delta Dental PPO",
-    status: "approved",
-    open: 4,
-    blocking: 2,
-  },
-  {
-    id: "PRED-SIM-DA-U01",
-    patient: "Robert Thompson",
-    finding: "Clean · D1110 prophylaxis",
-    charges: 150,
-    payer: "Delta Dental PPO",
-    status: "approved",
-    open: 3,
-    blocking: 1,
-  },
-  {
-    id: "PRED-SIM-DA-U02",
-    patient: "Maria Santos",
-    finding: "Clean · D0274 bitewings",
-    charges: 85,
-    payer: "Delta Dental PPO",
-    status: "approved",
-    open: 4,
-    blocking: 1,
-  },
-  {
-    id: "PRED-SIM-DA-U03",
-    patient: "Kevin Lee",
-    finding: "Clean · D2391 composite",
-    charges: 175,
-    payer: "Cigna DPPO",
-    status: "approved",
-    open: 3,
-    blocking: 1,
-  },
-];
+/** Shape of a /decisions/queue row. `open` is the count of open
+ *  conditions; `blocking` is how many of the case's signals carry
+ *  mode === "human_approval" — the ones needing a signature. */
 
 const DOT: Record<Status, string> = {
   approved: "bg-accord-green-500",
@@ -201,18 +125,37 @@ function CountCell({
 }
 
 export default function WorkbenchPipeline() {
-  const [selectedId, setSelectedId] = useState(QUEUE[0].id);
+  const [clickedId, setClickedId] = useState<string | null>(null);
   // Below md the two panels share the screen one at a time.
   const [showDetail, setShowDetail] = useState(false);
+  const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
 
-  // No queries here any more. PreDDetail owns every request the right
-  // half makes; this component's only job is which pre-D is selected.
+  const { data, isLoading } = useQuery({
+    queryKey: ["decisions", "queue", selectedDate],
+    queryFn: async () =>
+      (
+        await api.get<QueueRow[]>(
+          `/decisions/queue?date=${encodeURIComponent(selectedDate)}`,
+        )
+      ).data,
+    staleTime: 60_000,
+  });
+  const QUEUE: QueueRow[] = Array.isArray(data) ? data : [];
+
+  // Derived, not stored: changing the date replaces the queue, and a
+  // selectedId held in state would keep the right-hand panel on a
+  // patient who is not on the new day's list.
+  const selectedId =
+    clickedId && QUEUE.some((r) => r.id === clickedId)
+      ? clickedId
+      : (QUEUE[0]?.id ?? null);
+
   const action = QUEUE.filter((r) => r.status !== "approved");
   const ready = QUEUE.filter((r) => r.status === "approved");
   const pended = QUEUE.filter((r) => r.status === "pended");
 
   function select(id: string) {
-    setSelectedId(id);
+    setClickedId(id);
     setShowDetail(true);
   }
 
@@ -231,6 +174,14 @@ export default function WorkbenchPipeline() {
           <p className="mt-0.5 text-[12px] text-gray-500">
             Suwanee Smiles · {action.length} need action
           </p>
+
+          <div className="mt-2">
+            <DatePickerDropdown
+              selectedDate={selectedDate}
+              availableDates={availableDates}
+              onChange={setSelectedDate}
+            />
+          </div>
 
           <div className="mt-3 grid grid-cols-3 gap-2">
             <CountCell
@@ -273,10 +224,23 @@ export default function WorkbenchPipeline() {
           />
         ))}
 
+        {isLoading && (
+          <div className="animate-pulse space-y-2 px-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-10 rounded bg-gray-100" />
+            ))}
+          </div>
+        )}
+
+        {!isLoading && QUEUE.length === 0 && (
+          <p className="px-3 py-4 text-[11.5px] leading-relaxed text-gray-500">
+            Nobody is scheduled on this day. Pick another date above.
+          </p>
+        )}
+
         <p className="px-3 py-4 text-[11px] leading-relaxed text-gray-400">
-          Eight cases, read from the API on 6 Aug 2026. There is no list
-          endpoint yet, so this list does not refresh — the panel on the
-          right does.
+          Live from dental-os — the day's scheduled pre-Ds, their open
+          conditions and how many need a signature.
         </p>
       </aside>
 
@@ -289,6 +253,9 @@ export default function WorkbenchPipeline() {
           showDetail ? "flex" : "hidden"
         }`}
       >
+        {/* selectedId is null on a day with nobody booked. PreDDetail
+            takes a required id, so there is nothing to render. */}
+        {selectedId && (
         <PreDDetail
           predRequestId={selectedId}
           beforeTopbar={
@@ -302,6 +269,7 @@ export default function WorkbenchPipeline() {
             </button>
           }
         />
+        )}
       </section>
 
     </div>

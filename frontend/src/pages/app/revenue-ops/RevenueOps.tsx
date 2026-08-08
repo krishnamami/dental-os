@@ -1,9 +1,11 @@
 import { useLocation, useNavigate } from "react-router-dom";
 
 import AppealsDashboard from "../../../components/AppealsDashboard";
+import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
 import ConditionsManager from "../../../components/ConditionsManager";
 import RevOpsAnalytics from "../../../components/RevOpsAnalytics";
 import SubmissionQueue from "../../../components/SubmissionQueue";
+import { useDatePicker } from "../../../hooks/useDatePicker";
 import { useDemoLink } from "../../../hooks/useDemo";
 import { formatCurrencyShort } from "../../../utils/format";
 
@@ -61,9 +63,25 @@ export default function RevenueOps() {
   const navigate = useNavigate();
   const demoLink = useDemoLink();
   const active = tabFromPath(pathname);
+  const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
 
   return (
     <div className="p-4 sm:p-6">
+      {/* The picker drives the submission queue only. The four metrics
+          above and the other three tabs are not day-scoped — appeals
+          and conditions span weeks — so moving the date does not touch
+          them, and they do not claim to change. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[13px] font-semibold text-gray-900">
+          Revenue operations
+        </p>
+        <DatePickerDropdown
+          selectedDate={selectedDate}
+          availableDates={availableDates}
+          onChange={setSelectedDate}
+        />
+      </div>
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
           label="Ready to submit"
@@ -107,7 +125,7 @@ export default function RevenueOps() {
       </div>
 
       <div className="mt-4">
-        {active === "queue" && <SubmissionQueue />}
+        {active === "queue" && <SubmissionQueue date={selectedDate} />}
         {active === "conditions" && <ConditionsManager />}
         {active === "appeals" && <AppealsDashboard />}
         {active === "analytics" && <RevOpsAnalytics />}

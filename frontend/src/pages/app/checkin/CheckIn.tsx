@@ -1,10 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import SchedulePicker, {
-  todayIso,
-  useScheduleDates,
-} from "../../../components/SchedulePicker";
+import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
+import { useDatePicker } from "../../../hooks/useDatePicker";
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api } from "../../../hooks/useApi";
 import { useDemo } from "../../../hooks/useDemo";
@@ -418,8 +416,8 @@ export default function CheckIn() {
   const [filter, setFilter] = useState<Filter>("all");
   // Demo mode cannot write, so its check-ins live here instead.
   const [localCheckIn, setLocalCheckIn] = useState<Record<string, string>>({});
-  const [selectedDate, setSelectedDate] = useState<string>(todayIso());
-  const dates = useScheduleDates(selectedDate);
+  const { selectedDate, setSelectedDate, availableDates, today } =
+    useDatePicker();
 
   // The date is in the KEY, not just the URL. Without it React Query
   // serves the previous day's cached list under the same key while the
@@ -486,7 +484,7 @@ export default function CheckIn() {
   const inBucket = (s: Exclude<Filter, "all">) =>
     patients.filter((p) => statusOf(p) === s);
 
-  const isPast = selectedDate !== todayIso();
+  const isPast = selectedDate !== today;
   const allHeadsUp = inBucket("heads_up");
   const allClear = inBucket("clear");
   const allSeen = inBucket("checked_in");
@@ -518,10 +516,10 @@ export default function CheckIn() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <SchedulePicker
-              value={selectedDate}
+            <DatePickerDropdown
+              selectedDate={selectedDate}
+              availableDates={availableDates}
               onChange={setSelectedDate}
-              dates={dates}
             />
             {!isLoading && (
               <span
