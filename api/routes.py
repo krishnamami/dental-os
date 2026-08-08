@@ -390,6 +390,7 @@ async def decisions_queue(
         SELECT pr.pred_request_id,
                p.first_name || ' ' || p.last_name AS patient_name,
                pr.payer_id, pr.total_case_value,
+               pr.created_at, pr.submitted_at,
                ps.decision, ps.open_conditions, ps.submission_ready
         FROM pred_requests pr
         JOIN patients p ON p.patient_id = pr.patient_id
@@ -433,6 +434,13 @@ async def decisions_queue(
             "open": len(conditions),
             "blocking": blocking.get(rid, 0),
             "submission_ready": bool(row["submission_ready"]),
+            # When the case entered the queue, so a biller can see what
+            # has been sitting. submitted_at is NULL on every row in
+            # this corpus — nothing has ever been sent — so a client
+            # dating the payer window off it would show every deadline
+            # as today. Both are returned; the client decides.
+            "created_at": _iso(row["created_at"]),
+            "submitted_at": _iso(row["submitted_at"]),
         })
     out.sort(key=lambda x: order.get(x["id"], 99))
     return out
