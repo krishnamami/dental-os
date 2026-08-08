@@ -1,6 +1,10 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
+import SchedulePicker, {
+  todayIso,
+  useScheduleDates,
+} from "../../../components/SchedulePicker";
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
 import type { PatientSummary } from "../../../types/dental";
@@ -477,10 +481,20 @@ export default function PatientFinancial() {
   const [filter, setFilter] = useState<Bucket | "all">("all");
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set());
   const [checks, setChecks] = useState<Record<string, Set<number>>>({});
+  const [selectedDate, setSelectedDate] = useState<string>(todayIso());
+  const dates = useScheduleDates(selectedDate);
 
+  // Same key shape as the check-in screen, date included: the two pages
+  // read the same endpoint, and a key without the date would have one
+  // of them serving the other's day out of cache.
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["checkin", "today"],
-    queryFn: async () => (await api.get<CheckInPatient[]>("/checkin/today")).data,
+    queryKey: ["checkin", "today", selectedDate],
+    queryFn: async () =>
+      (
+        await api.get<CheckInPatient[]>(
+          `/checkin/today?date=${encodeURIComponent(selectedDate)}`,
+        )
+      ).data,
     refetchInterval: 30_000,
   });
   const patients = Array.isArray(data) ? data : [];
@@ -570,15 +584,22 @@ export default function PatientFinancial() {
   return (
     <div className="relative min-h-full pb-16">
       <div className="mx-auto max-w-4xl px-6 py-6">
-        <div>
-          <h1 className="text-[22px] font-semibold text-gray-900">
-            Good morning{firstName ? `, ${firstName}` : ""}
-          </h1>
-          <p className="mt-0.5 text-[13px] text-slate-500">
-            {role ? ROLE_LABELS[role] : ""}
-            {role && " · "}
-            {practice}
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-[22px] font-semibold text-gray-900">
+              Good morning{firstName ? `, ${firstName}` : ""}
+            </h1>
+            <p className="mt-0.5 text-[13px] text-slate-500">
+              {role ? ROLE_LABELS[role] : ""}
+              {role && " · "}
+              {practice}
+            </p>
+          </div>
+          <SchedulePicker
+            value={selectedDate}
+            onChange={setSelectedDate}
+            dates={dates}
+          />
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-3">

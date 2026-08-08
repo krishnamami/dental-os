@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import SchedulePicker, {
+  todayIso,
+  useScheduleDates,
+} from "../../../components/SchedulePicker";
 import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api } from "../../../hooks/useApi";
 import { useDemo } from "../../../hooks/useDemo";
@@ -209,6 +213,7 @@ function PatientCard({
   tenantName,
   localTime,
   busy,
+  past,
   onCheckIn,
   onPrintBlocked,
 }: {
@@ -216,6 +221,8 @@ function PatientCard({
   tenantName: string;
   localTime?: string;
   busy: boolean;
+  /** Viewing a day that is not today — arrivals cannot be recorded. */
+  past: boolean;
   onCheckIn: () => void;
   onPrintBlocked: () => void;
 }) {
@@ -318,18 +325,25 @@ function PatientCard({
       )}
 
       <div className="flex flex-wrap gap-2 px-5 py-4">
+        {/* POST /checkin stamps checkin_day with the SERVER's today, so
+            checking someone in while looking at last Tuesday would file
+            the arrival under the wrong day and silently move a card on
+            the live screen. Read-only is the honest state here. */}
         <button
           type="button"
           onClick={onCheckIn}
-          disabled={done || busy}
+          disabled={done || busy || past}
+          title={past ? "Arrivals can only be recorded on the day" : undefined}
           className="cursor-pointer rounded-lg border-none px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           style={{ backgroundColor: GREEN }}
         >
           {done
             ? `Checked in at ${at}`
-            : busy
-              ? "Checking in…"
-              : "Check in patient ✓"}
+            : past
+              ? "Not today"
+              : busy
+                ? "Checking in…"
+                : "Check in patient ✓"}
         </button>
         <button
           type="button"
@@ -404,10 +418,21 @@ export default function CheckIn() {
   const [filter, setFilter] = useState<Filter>("all");
   // Demo mode cannot write, so its check-ins live here instead.
   const [localCheckIn, setLocalCheckIn] = useState<Record<string, string>>({});
+  const [selectedDate, setSelectedDate] = useState<string>(todayIso());
+  const dates = useScheduleDates(selectedDate);
 
+  // The date is in the KEY, not just the URL. Without it React Query
+  // serves the previous day's cached list under the same key while the
+  // new one loads, and the screen shows yesterday's patients captioned
+  // with today's date.
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["checkin", "today"],
-    queryFn: async () => (await api.get<CheckInPatient[]>("/checkin/today")).data,
+    queryKey: ["checkin", "today", selectedDate],
+    queryFn: async () =>
+      (
+        await api.get<CheckInPatient[]>(
+          `/checkin/today?date=${encodeURIComponent(selectedDate)}`,
+        )
+      ).data,
     refetchInterval: 30_000,
   });
   const patients = Array.isArray(data) ? data : [];
@@ -461,6 +486,7 @@ export default function CheckIn() {
   const inBucket = (s: Exclude<Filter, "all">) =>
     patients.filter((p) => statusOf(p) === s);
 
+  const isPast = selectedDate !== todayIso();
   const allHeadsUp = inBucket("heads_up");
   const allClear = inBucket("clear");
   const allSeen = inBucket("checked_in");
@@ -491,19 +517,26 @@ export default function CheckIn() {
               {tenantName}
             </p>
           </div>
-          {!isLoading && (
-            <span
-              className={`rounded-full px-3 py-1 text-[12px] font-semibold ${
-                allHeadsUp.length > 0
-                  ? "bg-amber-50 text-amber-700"
-                  : "bg-green-50 text-green-700"
-              }`}
-            >
-              {allHeadsUp.length > 0
-                ? `⚠ ${allHeadsUp.length} heads up`
-                : "✅ All clear"}
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <SchedulePicker
+              value={selectedDate}
+              onChange={setSelectedDate}
+              dates={dates}
+            />
+            {!isLoading && (
+              <span
+                className={`rounded-full px-3 py-1 text-[12px] font-semibold ${
+                  allHeadsUp.length > 0
+                    ? "bg-amber-50 text-amber-700"
+                    : "bg-green-50 text-green-700"
+                }`}
+              >
+                {allHeadsUp.length > 0
+                  ? `⚠ ${allHeadsUp.length} heads up`
+                  : "✅ All clear"}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-3">
@@ -602,6 +635,7 @@ export default function CheckIn() {
                 p={p}
                 tenantName={tenantName}
                 busy={checkInMutation.isPending}
+                past={isPast}
                 onCheckIn={() => checkIn(p)}
                 onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
@@ -620,6 +654,7 @@ export default function CheckIn() {
                 p={p}
                 tenantName={tenantName}
                 busy={checkInMutation.isPending}
+                past={isPast}
                 onCheckIn={() => checkIn(p)}
                 onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
@@ -639,6 +674,7 @@ export default function CheckIn() {
                 tenantName={tenantName}
                 localTime={localCheckIn[p.pred_request_id]}
                 busy={false}
+                past={isPast}
                 onCheckIn={() => checkIn(p)}
                 onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
