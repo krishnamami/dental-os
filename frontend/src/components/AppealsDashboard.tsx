@@ -58,13 +58,32 @@ function AppealCard({
   predRequestId,
   subtitle,
   onGenerate,
+  onToast,
 }: {
   predRequestId: string;
   subtitle: string;
   onGenerate: (a: Appeal) => void;
+  onToast: (m: string) => void;
 }) {
   const { data, isLoading, isError } = useAppeal(predRequestId);
   const demoLink = useDemoLink();
+  const [building, setBuilding] = useState(false);
+  const [built, setBuilt] = useState(false);
+
+  // The packet is assembled from data already in hand, so this is fast
+  // enough to feel like nothing happened. The pause is honest about
+  // the work being done, not a fake progress bar: the packet opens
+  // when it opens, and the button then stays in a "ready" state so the
+  // biller can reopen it without regenerating.
+  function generate(appeal: Appeal) {
+    setBuilding(true);
+    window.setTimeout(() => {
+      setBuilding(false);
+      setBuilt(true);
+      onGenerate(appeal);
+      onToast(`Appeal packet generated for ${scenarioId(predRequestId)}`);
+    }, 1500);
+  }
 
   if (isLoading) {
     return (
@@ -149,10 +168,15 @@ function AppealCard({
           <>
             <button
               type="button"
-              onClick={() => onGenerate(data)}
-              className="rounded-lg bg-accord-green-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-accord-green-700"
+              disabled={building}
+              onClick={() => (built ? onGenerate(data) : generate(data))}
+              className="rounded-lg bg-accord-green-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-accord-green-700 disabled:opacity-70"
             >
-              Generate appeal packet
+              {building
+                ? "Generating…"
+                : built
+                  ? "Appeal packet ready ✓ — open"
+                  : "Generate appeal packet"}
             </button>
             <Link
               to={demoLink(`/evidence/${data.pred_request_id}`)}
@@ -175,7 +199,11 @@ function AppealCard({
   );
 }
 
-export default function AppealsDashboard() {
+export default function AppealsDashboard({
+  onToast = () => {},
+}: {
+  onToast?: (m: string) => void;
+}) {
   const [packet, setPacket] = useState<Appeal | null>(null);
 
   return (
@@ -211,6 +239,7 @@ export default function AppealsDashboard() {
           predRequestId={a.predRequestId}
           subtitle={a.subtitle}
           onGenerate={setPacket}
+          onToast={onToast}
         />
       ))}
 

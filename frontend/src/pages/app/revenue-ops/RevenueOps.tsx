@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import AppealsDashboard from "../../../components/AppealsDashboard";
@@ -5,6 +7,8 @@ import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
 import ConditionsManager from "../../../components/ConditionsManager";
 import RevOpsAnalytics from "../../../components/RevOpsAnalytics";
 import SubmissionQueue from "../../../components/SubmissionQueue";
+import Toast, { useToast } from "../../../components/Toast";
+import { api } from "../../../hooks/useApi";
 import { useDatePicker } from "../../../hooks/useDatePicker";
 import { useDemoLink } from "../../../hooks/useDemo";
 import { formatCurrencyShort } from "../../../utils/format";
@@ -34,19 +38,35 @@ function tabFromPath(pathname: string): TabId {
   return match?.id ?? "queue";
 }
 
+/** Every metric is a control now, so each one is a button — a div with
+ *  an onClick is unreachable by keyboard and invisible to a screen
+ *  reader, and this row is the primary filter for the page. */
 function Metric({
   label,
   value,
   tone = "text-gray-900",
   note,
+  active = false,
+  onClick,
 }: {
   label: string;
   value: string;
   tone?: string;
   note?: string;
+  active?: boolean;
+  onClick: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`cursor-pointer rounded-xl border p-4 text-left transition ${
+        active
+          ? "border-2 border-accord-green-500 bg-accord-green-50 ring-2 ring-accord-green-300"
+          : "border-gray-200 bg-white hover:bg-gray-50"
+      }`}
+    >
       <p className="text-[11px] uppercase tracking-wide text-gray-500">
         {label}
       </p>
@@ -54,8 +74,14 @@ function Metric({
         {value}
       </p>
       {note && <p className="mt-1.5 text-[11px] text-gray-400">{note}</p>}
-    </div>
+    </button>
   );
+}
+
+interface QueueRow {
+  id: string;
+  charges: number;
+  submission_ready: boolean;
 }
 
 export default function RevenueOps() {
@@ -64,6 +90,32 @@ export default function RevenueOps() {
   const demoLink = useDemoLink();
   const active = tabFromPath(pathname);
   const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
+  const [filter, setFilter] = useState<"all" | "ready" | "blocked">("all");
+  const { toast, flash } = useToast();
+
+  // Same key SubmissionQueue uses — this is a cache read, not a second
+  // request. It exists so the metrics can COUNT the queue instead of
+  // asserting 9 / 3 / $47k with "sample" under them.
+  const { data } = useQuery({
+    queryKey: ["decisions", "queue", selectedDate],
+    queryFn: async () =>
+      (
+        await api.get<QueueRow[]>(
+          `/decisions/queue?date=${encodeURIComponent(selectedDate)}`,
+        )
+      ).data,
+    staleTime: 60_000,
+  });
+  const rows: QueueRow[] = Array.isArray(data) ? data : [];
+  const readyCount = rows.filter((r) => r.submission_ready).length;
+  const blockedRows = rows.filter((r) => !r.submission_ready);
+  // Money sitting behind an open condition, not a guess.
+  const atRisk = blockedRows.reduce((sum, r) => sum + (r.charges ?? 0), 0);
+
+  function toggle(next: "ready" | "blocked") {
+    setFilter((f) => (f === next ? "all" : next));
+    if (active !== "queue") navigate(demoLink("/revenue-ops"));
+  }
 
   return (
     <div className="p-4 sm:p-6">
@@ -85,22 +137,34 @@ export default function RevenueOps() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Metric
           label="Ready to submit"
-          value="9"
+          value={String(readyCount)}
           tone="text-accord-green-700"
-          note="sample"
+          note="on this date"
+          active={active === "queue" && filter === "ready"}
+          onClick={() => toggle("ready")}
         />
         <Metric
           label="Blocked"
-          value="3"
+          value={String(blockedRows.length)}
           tone="text-accord-amber-900"
-          note="sample"
+          note="on this date"
+          active={active === "queue" && filter === "blocked"}
+          onClick={() => toggle("blocked")}
         />
-        <Metric label="Appeals active" value="3" note="2 live · 1 sample" />
+        <Metric
+          label="Appeals active"
+          value="3"
+          note="2 live · 1 sample"
+          active={active === "appeals"}
+          onClick={() => navigate(demoLink("/revenue-ops/appeals"))}
+        />
         <Metric
           label="Revenue at risk"
-          value={formatCurrencyShort(47000)}
+          value={formatCurrencyShort(atRisk)}
           tone="text-accord-amber-900"
-          note="sample"
+          note="blocked charges"
+          active={active === "analytics"}
+          onClick={() => navigate(demoLink("/revenue-ops/analytics"))}
         />
       </div>
 
@@ -125,11 +189,19 @@ export default function RevenueOps() {
       </div>
 
       <div className="mt-4">
-        {active === "queue" && <SubmissionQueue date={selectedDate} />}
-        {active === "conditions" && <ConditionsManager />}
-        {active === "appeals" && <AppealsDashboard />}
+        {active === "queue" && (
+          <SubmissionQueue
+            date={selectedDate}
+            filter={filter}
+            onToast={flash}
+          />
+        )}
+        {active === "conditions" && <ConditionsManager onToast={flash} />}
+        {active === "appeals" && <AppealsDashboard onToast={flash} />}
         {active === "analytics" && <RevOpsAnalytics />}
       </div>
+
+      <Toast message={toast} />
     </div>
   );
 }
