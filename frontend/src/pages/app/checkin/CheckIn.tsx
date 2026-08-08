@@ -212,6 +212,8 @@ function PatientCard({
   localTime,
   busy,
   past,
+  notified,
+  onNotify,
   onCheckIn,
   onPrintBlocked,
 }: {
@@ -221,6 +223,8 @@ function PatientCard({
   busy: boolean;
   /** Viewing a day that is not today — arrivals cannot be recorded. */
   past: boolean;
+  notified: boolean;
+  onNotify: () => void;
   onCheckIn: () => void;
   onPrintBlocked: () => void;
 }) {
@@ -315,7 +319,7 @@ function PatientCard({
               </div>
             ))}
           </div>
-          <p className="mt-2 text-[12.5px] italic text-slate-400">
+          <p className="mt-2 text-[11px] italic text-[#6b7280]">
             A treatment coordinator will review the full cost estimate with{" "}
             {firstNameOf(p.patient_name)} shortly.
           </p>
@@ -343,6 +347,7 @@ function PatientCard({
                 ? "Checking in…"
                 : "Check in patient ✓"}
         </button>
+        <NotifyAction p={p} notified={notified} onNotify={onNotify} />
         <button
           type="button"
           onClick={() => {
@@ -350,10 +355,166 @@ function PatientCard({
           }}
           className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
         >
-          Print for patient
+          Print check-in summary
         </button>
       </div>
     </article>
+  );
+}
+
+/**
+ * "Notify clinical team", or the confirmation that replaces it.
+ *
+ * The button does not survive being pressed: a second "notify" on the
+ * same patient is a second interruption for whoever is mid-procedure,
+ * and a button that stays clickable invites exactly that. The green
+ * line that takes its place says who was told.
+ *
+ * ⚠ NOTHING IS SENT. There is no notifications table and no channel to
+ * the operatory — this records the tap in the browser tab and nowhere
+ * else. The check-in screen's footer already carries that caveat for
+ * the demo; if this ships, it needs a real destination first.
+ */
+function NotifyAction({
+  p,
+  notified,
+  onNotify,
+}: {
+  p: CheckInPatient;
+  notified: boolean;
+  onNotify: () => void;
+}) {
+  if (notified) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-1 py-2 text-[12.5px] font-medium text-green-700">
+        ✅ {p.provider_name} notified
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onNotify}
+      className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
+    >
+      Notify clinical team
+    </button>
+  );
+}
+
+/**
+ * A patient with nothing to raise.
+ *
+ * One row, no dark strip, no alert block — there are no alerts, and a
+ * full card for an empty finding buries the two patients who DO need
+ * reading. The desk's eye should land on amber.
+ */
+function ClearCard({
+  p,
+  tenantName,
+  busy,
+  past,
+  notified,
+  onNotify,
+  onCheckIn,
+  onPrintBlocked,
+}: {
+  p: CheckInPatient;
+  tenantName: string;
+  busy: boolean;
+  past: boolean;
+  notified: boolean;
+  onNotify: () => void;
+  onCheckIn: () => void;
+  onPrintBlocked: () => void;
+}) {
+  return (
+    <article className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-gray-200 bg-white px-5 py-3.5">
+      <span
+        aria-hidden="true"
+        className="h-2 w-2 flex-shrink-0 rounded-full"
+        style={{ backgroundColor: "#16a34a" }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm">
+          <span className="font-semibold text-slate-800">
+            {p.patient_name}
+          </span>
+          <span className="text-slate-500">
+            {" "}
+            · {p.appointment_time} · {p.procedure_summary}
+          </span>
+        </p>
+        <p className="mt-0.5 text-[11.5px] text-slate-500">
+          {p.payer_name} · ✅ All clear — nothing to flag
+        </p>
+      </div>
+      <span className="flex-shrink-0 rounded-full bg-green-100 px-2.5 py-0.5 text-[11px] font-bold text-green-700">
+        ✅ CLEAR
+      </span>
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <button
+          type="button"
+          onClick={onCheckIn}
+          disabled={busy || past}
+          title={past ? "Arrivals can only be recorded on the day" : undefined}
+          className="cursor-pointer rounded-lg border-none px-3 py-1.5 text-[12.5px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ backgroundColor: GREEN }}
+        >
+          {past ? "Not today" : busy ? "Checking in…" : "Check in ✓"}
+        </button>
+        {notified ? (
+          <span className="text-[12px] font-medium text-green-700">
+            ✅ {p.provider_name} notified
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onNotify}
+            className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] text-slate-600 transition hover:bg-slate-50"
+          >
+            Notify clinical
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            if (!openPrintWindow(p, tenantName)) onPrintBlocked();
+          }}
+          className="cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] text-slate-600 transition hover:bg-slate-50"
+        >
+          Print
+        </button>
+      </div>
+    </article>
+  );
+}
+
+/** Someone who has arrived. One line — the work on them is done. */
+function CheckedInRow({
+  p,
+  at,
+  notified,
+}: {
+  p: CheckInPatient;
+  at: string;
+  notified: boolean;
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2.5 rounded-xl border border-green-300 bg-green-50 px-4 py-2.5">
+      <span className="text-[16px]" aria-hidden="true">
+        ✅
+      </span>
+      <div className="min-w-0 flex-1 text-[13px] font-medium text-green-700">
+        {p.patient_name} checked in{at ? ` at ${at}` : ""}
+      </div>
+      {/* Only claimed when someone actually pressed it. The mock had
+          this line unconditionally, which would tell the desk the
+          operatory knows when nobody has told them. */}
+      <div className="text-[11px] text-[#6b7280]">
+        {notified ? "Clinical team notified" : "Clinical team not yet notified"}
+      </div>
+    </div>
   );
 }
 
@@ -416,6 +577,9 @@ export default function CheckIn() {
   const [filter, setFilter] = useState<Filter>("all");
   // Demo mode cannot write, so its check-ins live here instead.
   const [localCheckIn, setLocalCheckIn] = useState<Record<string, string>>({});
+  // Who the operatory has been told about. This tab only — see
+  // NotifyAction; nothing is sent anywhere.
+  const [notified, setNotified] = useState<Set<string>>(new Set());
   const { selectedDate, setSelectedDate, availableDates, today } =
     useDatePicker();
 
@@ -493,6 +657,13 @@ export default function CheckIn() {
   const headsUp = shows("heads_up") ? allHeadsUp : [];
   const clear = shows("clear") ? allClear : [];
   const seen = shows("checked_in") ? allSeen : [];
+
+  function notify(p: CheckInPatient) {
+    setNotified((prev) => new Set(prev).add(p.pred_request_id));
+    flash(
+      `${p.provider_name} notified — ${firstNameOf(p.patient_name)} is ready in reception`,
+    );
+  }
 
   function toggle(s: Exclude<Filter, "all">) {
     setFilter((f) => (f === s ? "all" : s));
@@ -634,6 +805,8 @@ export default function CheckIn() {
                 tenantName={tenantName}
                 busy={checkInMutation.isPending}
                 past={isPast}
+                notified={notified.has(p.pred_request_id)}
+                onNotify={() => notify(p)}
                 onCheckIn={() => checkIn(p)}
                 onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
@@ -647,12 +820,14 @@ export default function CheckIn() {
               ✅ CLEAR TO CHECK IN ({clear.length})
             </h2>
             {clear.map((p) => (
-              <PatientCard
+              <ClearCard
                 key={p.pred_request_id}
                 p={p}
                 tenantName={tenantName}
                 busy={checkInMutation.isPending}
                 past={isPast}
+                notified={notified.has(p.pred_request_id)}
+                onNotify={() => notify(p)}
                 onCheckIn={() => checkIn(p)}
                 onPrintBlocked={() => flash("Allow pop-ups to print")}
               />
@@ -663,18 +838,18 @@ export default function CheckIn() {
         {seen.length > 0 && (
           <section className="mt-6">
             <h2 className="mb-3 text-sm font-semibold text-slate-600">
-              CHECKED IN ({seen.length})
+              ✅ CHECKED IN TODAY ({seen.length})
             </h2>
             {seen.map((p) => (
-              <PatientCard
+              <CheckedInRow
                 key={p.pred_request_id}
                 p={p}
-                tenantName={tenantName}
-                localTime={localCheckIn[p.pred_request_id]}
-                busy={false}
-                past={isPast}
-                onCheckIn={() => checkIn(p)}
-                onPrintBlocked={() => flash("Allow pop-ups to print")}
+                at={
+                  p.checked_in_at
+                    ? timeOf(p.checked_in_at)
+                    : (localCheckIn[p.pred_request_id] ?? "")
+                }
+                notified={notified.has(p.pred_request_id)}
               />
             ))}
           </section>
