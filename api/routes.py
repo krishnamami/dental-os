@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.auth import (
+    TENANT_CONTACTS,
     assert_tenant_allowed,
     require_admin,
     require_claims_or_demo,
@@ -1235,6 +1236,8 @@ async def checkin_today(
         """
         SELECT pr.pred_request_id,
                p.first_name || ' ' || p.last_name AS patient_name,
+               p.email AS patient_email,
+               p.mobile_phone AS patient_phone,
                pr.payer_id, pr.provider_npi,
                ep.member_id, ep.enrollment_date,
                ep.annual_maximum, ep.annual_maximum_used,
@@ -1271,6 +1274,22 @@ async def checkin_today(
                 name = f"{first} {last}".strip()
                 return f"Dr. {name}" if name else (npi or "Provider")
         return npi or "Provider"
+
+    # WHO IS SENDING. The JWT carries sub, role and tenant_id — no name
+    # and no email — so `claims.get("name")` would be silently empty on
+    # every response and the mail client would open with a blank From.
+    # Read the signed-in user instead. Demo mode has no user row, and
+    # says so rather than inventing a sender.
+    sender_name, sender_email = "Treatment Coordinator", ""
+    sub = claims.get("sub")
+    if sub and not claims.get("demo"):
+        who = await execute_os_with_tenant(
+            os_pool, tenant,
+            "SELECT name, email FROM users WHERE user_id = $1", sub)
+        if who:
+            sender_name = who[0]["name"] or sender_name
+            sender_email = who[0]["email"] or ""
+    contact = TENANT_CONTACTS.get(tenant, {})
 
     checked = await execute_os_with_tenant(
         os_pool, tenant,
@@ -1390,6 +1409,15 @@ async def checkin_today(
         out.append({
             "pred_request_id": rid,
             "patient_name": row["patient_name"],
+            "patient_email": row["patient_email"],
+            "patient_phone": row["patient_phone"],
+            # Repeated on every row rather than hoisted, because this
+            # endpoint returns a bare list and the client renders one
+            # card per row. Cheap: four short strings.
+            "sender_name": sender_name,
+            "sender_email": sender_email,
+            "practice_email": contact.get("email", ""),
+            "practice_phone": contact.get("phone", ""),
             "appointment_time": schedule[rid]["time"],
             "procedures": codes,
             # The schedule's own wording when the practice set one,
@@ -1670,3 +1698,91 @@ async def practice_settings(
         ],
     }
 
+
+
+class SMSRequest(BaseModel):
+    pred_request_id: str
+    patient_name: str
+    patient_phone: str
+    message: str
+
+
+@router.post("/communications/sms")
+async def send_sms(
+    req: SMSRequest,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
+) -> dict:
+    """Text a patient their estimate summary.
+
+    ⚠ NOTHING IS SENT. This logs the message and returns success. AWS
+    SNS is not wired: there is no SNS topic, no spend limit, no opt-out
+    handling and no origination number, and switching it on without
+    those is how a demo texts a real phone.
+
+    To go live, uncomment the boto3 block AND first:
+      - set an SMS monthly spend limit on the account
+      - register an origination identity (10DLC in the US)
+      - implement STOP/HELP handling, which is a legal requirement
+      - stop accepting the phone number from the CLIENT and read it
+        from `patients` server-side, exactly as the check-in screen
+        does — see below
+
+    THE NUMBER IN THIS REQUEST IS NOT TRUSTED. It arrives from the
+    browser, so a caller could post any number with any patient's name
+    attached. It is echoed back for the demo but never dialled; the
+    production path must look the number up from the pre-D's own
+    patient row under the caller's tenant.
+    """
+    tenant = tenant_filter(claims)
+    if tenant:
+        # Same boundary as every other route: you may only message a
+        # patient whose pre-D belongs to your practice.
+        owner = await _tenant_for(request, req.pred_request_id)
+        assert_tenant_allowed(claims, owner)
+
+    if len(req.message) > 320:
+        raise HTTPException(422, "message is longer than two SMS segments")
+
+    # PRODUCTION — read the number from the database, not the request:
+    #
+    # sim, _ = _pools(request)
+    # rows = await fetch_with_tenant(
+    #     sim, owner,
+    #     "SELECT p.mobile_phone FROM patients p "
+    #     "JOIN pred_requests pr ON pr.patient_id = p.patient_id "
+    #     "WHERE pr.pred_request_id = $1", req.pred_request_id)
+    # to_number = rows[0]["mobile_phone"] if rows else None
+    #
+    # import boto3
+    # sns = boto3.client("sns", region_name="us-east-1")
+    # sns.publish(
+    #     PhoneNumber=to_number,
+    #     Message=req.message,
+    #     MessageAttributes={
+    #         "AWS.SNS.SMS.SenderID": {
+    #             "DataType": "String",
+    #             "StringValue": "AccordDental",
+    #         },
+    #         "AWS.SNS.SMS.SMSType": {
+    #             "DataType": "String",
+    #             "StringValue": "Transactional",
+    #         },
+    #     },
+    # )
+
+    # The message body is NOT logged. It carries a patient's name and
+    # what they owe, and application logs are the wrong place for both.
+    logger.info(
+        "sms requested by %s for %s (%d chars) — not sent, SNS not wired",
+        claims.get("sub", "demo"), req.pred_request_id, len(req.message),
+    )
+    return {
+        "status": "logged",
+        "to": req.patient_phone,
+        "patient": req.patient_name,
+        "note": (
+            "Demo mode — nothing was sent. AWS SNS is not connected; "
+            "see send_sms() for what production needs first."
+        ),
+    }

@@ -86,6 +86,29 @@ TENANT_ADDRESSES = {
     "dallas_dental": "7890 Commerce St, Dallas TX",
 }
 
+# How a patient reaches the practice back. These end up on a sheet
+# handed to a patient and in the reply-to of a mail they receive, so
+# they are the practice's own details — never a coordinator's personal
+# line.
+#
+# Still a literal, like the two tables above, because there is no
+# tenants-with-contact-details table on either database. The moment one
+# exists, all three of these move into it.
+TENANT_CONTACTS = {
+    "suwanee_smiles": {
+        "email": "info@suwaneesmiles.com",
+        "phone": "+17704912345",
+    },
+    "tampa_smiles": {
+        "email": "info@tampabaysmiles.com",
+        "phone": "+18135559876",
+    },
+    "dallas_dental": {
+        "email": "info@dallasfamilydental.com",
+        "phone": "+12145551234",
+    },
+}
+
 # Wired by main.py's lifespan once the pool exists.
 os_pool = None
 
