@@ -13,7 +13,7 @@
  * along with the accounts themselves.
  */
 import { useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { AccordLogo } from "../components/AccordLogo";
 import { HOME_FOR_ROLE, statusOf, useAuth } from "../context/AuthContext";
@@ -70,7 +70,6 @@ const DEMO_GROUPS: Array<{
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
   const passwordRef = useRef<HTMLInputElement>(null);
 
   const [email, setEmail] = useState("");
@@ -81,8 +80,6 @@ export default function Login() {
   // admin that can impersonate anyone — should not be the first thing
   // on the page. Someone who needs them knows to look.
   const [showDemo, setShowDemo] = useState(false);
-
-  const from = (location.state as { from?: string } | null)?.from;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,8 +94,16 @@ export default function Login() {
       // owner and admin on the workbench, and because all three hold
       // the `workbench` product ProductRoute would not even bounce
       // them. Wrong page, no error.
+      //
+      // `location.state.from` is deliberately IGNORED. ProtectedRoute
+      // records where a signed-out visitor was heading, and honouring
+      // it sent Jennifer to /checkin — a page she holds but does not
+      // start on — because that was the last URL in the bar. Worse,
+      // `from` survives a sign-out, so signing in as someone else
+      // landed the new user on the previous user's page. The role's
+      // home is the right landing every time.
       const user = await login(email, password);
-      navigate(from ?? HOME_FOR_ROLE[user.role] ?? "/workbench", {
+      navigate(HOME_FOR_ROLE[user.role as Role] ?? "/workbench", {
         replace: true,
       });
     } catch (err) {
