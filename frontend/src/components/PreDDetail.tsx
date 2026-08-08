@@ -290,10 +290,13 @@ export default function PreDDetail({
   beforeTopbar,
   /** Standalone page shows a link back to the queue. */
   backLink,
+  /** Where the user came from, when another product sent them here. */
+  back,
 }: {
   predRequestId: string | undefined;
   beforeTopbar?: React.ReactNode;
   backLink?: React.ReactNode;
+  back?: { label: string; onClick: () => void };
 }) {
   const navigate = useNavigate();
   const demoLink = useDemoLink();
@@ -331,6 +334,7 @@ export default function PreDDetail({
       <DetailTopbar
         root="Pre-D workbench"
         current={d?.patient_name ?? ""}
+        back={back}
         actions={[
           { label: "Add note", onClick: () => toastFor("Note feature coming soon") },
           { label: "Request docs", onClick: () => setDocsOpen(true), disabled: !d },

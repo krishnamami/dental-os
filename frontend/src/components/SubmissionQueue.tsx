@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 
 import { api, useConditions, useDecision } from "../hooks/useApi";
@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { useDemo, useDemoLink } from "../hooks/useDemo";
 import ReadinessBadge from "./ReadinessBadge";
 import { scenarioId } from "../utils/format";
+import { daysSince, deadlineFrom, queueTone } from "./BillingDetail";
 import type { Condition } from "../types/dental";
 
 /**
@@ -42,6 +43,45 @@ interface QueueRow {
   open: number;
   blocking: number;
   submission_ready: boolean;
+  /** pred_requests.created_at — when the case entered the queue. */
+  created_at?: string | null;
+  /** NULL on every row in this corpus: nothing has ever been sent. */
+  submitted_at?: string | null;
+}
+
+/**
+ * How long this has been sitting, and how long the payer window has left.
+ *
+ * The window runs from created_at, NOT submitted_at. submitted_at is
+ * null on every case in this corpus because nothing has ever gone out,
+ * so dating a 90-day validity from submission would print the same
+ * deadline — 90 days from today — on every card, which is the least
+ * useful answer available.
+ */
+function Ages({ row }: { row: QueueRow }) {
+  const days = daysSince(row.created_at);
+  const dl = deadlineFrom(row.created_at);
+  if (days == null) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+      <span style={{ color: queueTone(days) }}>
+        In queue: {days} {days === 1 ? "day" : "days"}
+      </span>
+      <span aria-hidden="true">·</span>
+      <span style={{ color: dl.tone }}>
+        Payer deadline: {dl.label}
+        {dl.daysLeft != null && ` (${dl.daysLeft}d)`}
+      </span>
+    </div>
+  );
+}
+
+/** Which team owns a condition. Same rule as the billing detail view. */
+function ownerOf(assignee?: string): "billing" | "front_desk" | "clinical" {
+  const a = assignee ?? "";
+  if (a === "billing" || a === "dso_manager") return "billing";
+  if (a === "front_desk") return "front_desk";
+  return "clinical";
 }
 
 const SUBMITTER: Record<
@@ -92,6 +132,7 @@ function BlockedRow({
   const [open, setOpen] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
   const demoLink = useDemoLink();
+  const navigate = useNavigate();
   const { data: decision } = useDecision(row.id);
   const { data: conditions, isLoading } = useConditions(
     open ? row.id : undefined,
@@ -116,6 +157,7 @@ function BlockedRow({
             {row.payer} · {scenarioId(row.id)} · {row.open} open ·{" "}
             {row.blocking} need a signature
           </span>
+          <Ages row={row} />
         </span>
         <span className="flex flex-shrink-0 items-center gap-2">
           {decision && (
@@ -147,7 +189,9 @@ function BlockedRow({
 
           {conditions && (
             <ul className="space-y-2">
-              {conditions.conditions.map((c) => {
+              {conditions.conditions
+                .filter((c) => ownerOf(c.assignee) === "billing")
+                .map((c) => {
                 const cleared = done.has(c.signal_code);
                 return (
                   <li
@@ -201,13 +245,55 @@ function BlockedRow({
             </ul>
           )}
 
+          {/* Everyone else's blockers, read-only. Kim needs to SEE them
+              — they are why the case is stuck — but resolving a
+              narrative she did not write is not hers to do. */}
+          {conditions &&
+            conditions.conditions.some(
+              (c) => ownerOf(c.assignee) !== "billing",
+            ) && (
+              <>
+                <p className="mb-1.5 mt-3 text-[10px] font-bold uppercase tracking-[0.12em] text-gray-400">
+                  Not yours
+                </p>
+                <ul className="space-y-1">
+                  {conditions.conditions
+                    .filter((c) => ownerOf(c.assignee) !== "billing")
+                    .map((c) => (
+                      <li
+                        key={c.signal_code}
+                        className="flex flex-wrap items-baseline gap-1.5 text-[11.5px] text-gray-500"
+                      >
+                        <span aria-hidden="true">ℹ</span>
+                        <span className="capitalize">
+                          {(c.assignee ?? "clinical").replace(/_/g, " ")}:
+                        </span>
+                        <span className="font-mono text-[10.5px]">
+                          {c.signal_code}
+                        </span>
+                        {c.sla_hours != null && <span>({c.sla_hours}h)</span>}
+                      </li>
+                    ))}
+                </ul>
+              </>
+            )}
+
           <div className="mt-3 flex flex-wrap gap-2">
-            <Link
-              to={demoLink(`/workbench/${row.id}`)}
+            <button
+              type="button"
+              onClick={() =>
+                navigate(demoLink(`/workbench/${row.id}`), {
+                  state: {
+                    from: "/revenue-ops",
+                    fromLabel: "Revenue ops",
+                    createdAt: row.created_at,
+                  },
+                })
+              }
               className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-[12px] font-medium text-gray-700 hover:bg-gray-50"
             >
               View full pre-D →
-            </Link>
+            </button>
             <Link
               to={demoLink("/revenue-ops/appeals")}
               className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-[12px] font-medium text-gray-700 hover:bg-gray-50"
@@ -239,6 +325,7 @@ function ReadyRow({
   onToast: (m: string) => void;
 }) {
   const demoLink = useDemoLink();
+  const navigate = useNavigate();
   const { isDemo } = useDemo();
   const { role } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -277,6 +364,7 @@ function ReadyRow({
         <p className="mt-0.5 text-[11.5px] text-gray-500">
           {row.finding} · {scenarioId(row.id)}
         </p>
+        <Ages row={row} />
       </div>
       <div className="flex flex-shrink-0 items-center gap-2">
         <ReadinessBadge score={14} />
@@ -288,12 +376,21 @@ function ReadyRow({
         >
           {busy ? "Submitting…" : "Submit pre-D ✓"}
         </button>
-        <Link
-          to={demoLink(`/workbench/${row.id}`)}
+        <button
+          type="button"
+          onClick={() =>
+            navigate(demoLink(`/workbench/${row.id}`), {
+              state: {
+                from: "/revenue-ops",
+                fromLabel: "Revenue ops",
+                createdAt: row.created_at,
+              },
+            })
+          }
           className="rounded-lg border border-gray-300 px-2.5 py-1 text-[12px] font-medium text-gray-700 hover:bg-gray-50"
         >
           View
-        </Link>
+        </button>
       </div>
     </li>
   );

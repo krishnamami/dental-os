@@ -35,6 +35,7 @@ export default function DetailTopbar({
   current,
   actions,
   primary,
+  back,
 }: {
   /** Left half of the breadcrumb, e.g. "Coverage". */
   root: string;
@@ -42,6 +43,10 @@ export default function DetailTopbar({
   current: string;
   actions: TopbarAction[];
   primary?: TopbarAction;
+  /** Where the user came from, when they arrived from another product.
+   *  Sits before the breadcrumb: a biller who opened this from Revenue
+   *  ops needs the way back to say "Revenue ops", not "queue". */
+  back?: { label: string; onClick: () => void };
 }) {
   return (
     <div
@@ -57,6 +62,27 @@ export default function DetailTopbar({
         flexShrink: 0,
       }}
     >
+      {back && (
+        <button
+          type="button"
+          onClick={back.onClick}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "rgba(255,255,255,0.65)",
+            fontSize: 11,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            marginRight: 12,
+            padding: 0,
+          }}
+        >
+          ← {back.label}
+        </button>
+      )}
+
       <span style={{ fontSize: 11, marginRight: "auto" }}>
         <span style={{ color: "rgba(255,255,255,0.45)" }}>{root}</span>
         {current && (
