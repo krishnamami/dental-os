@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from api.auth import (
     TENANT_CONTACTS,
     assert_tenant_allowed,
+    require_claims,
     require_admin,
     require_claims_or_demo,
     require_practice_admin,
@@ -341,6 +342,41 @@ def _queue_finding(conditions: list[str], decision: str | None) -> str:
     if "DOWNGRADE" in joined:
         return "Plan pays at a cheaper material's rate"
     return "No open findings"
+
+
+@router.get("/decisions/submitted")
+async def submitted_on(
+    request: Request,
+    # `date` in the URL, not in Python - this module imports
+    # datetime.date and a parameter of that name shadows it.
+    date_param: str | None = Query(None, alias="date"),
+    claims=Depends(require_claims_or_demo),
+) -> list[dict]:
+    """Pre-Ds submitted on one day. Defaults to today."""
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    _, os_pool = _pools(request)
+
+    if date_param:
+        try:
+            on = date.fromisoformat(date_param)
+        except ValueError:
+            raise HTTPException(422, "date must be YYYY-MM-DD")
+    else:
+        on = date.today()
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT submission_id, pred_request_id, patient_name, payer_name,
+               submitted_at, status, expected_response_days,
+               submission_method, submission_ref
+        FROM submission_events
+        WHERE tenant_id = $1 AND submitted_at::date = $2
+        ORDER BY submitted_at DESC
+        """,
+        tenant, on,
+    )
+    return [{**r, "submitted_at": _iso(r["submitted_at"])} for r in rows]
 
 
 @router.get("/decisions/queue")
@@ -1785,4 +1821,377 @@ async def send_sms(
             "Demo mode — nothing was sent. AWS SNS is not connected; "
             "see send_sms() for what production needs first."
         ),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Submission, denial and appeal tracking — migrations/003.
+#
+# ⚠ NO fetch_os_with_tenant / execute_os_with_tenant ARE DEFINED HERE.
+# execute_os_with_tenant already exists in core/db/connection.py, reads
+# AND writes, and has twelve callers. Redefining it to return fetchrow
+# would break every one of them. Its version is also the safe one: the
+# tenant goes in as a BOUND PARAMETER to set_config(..., is_local=true)
+# inside a transaction, where the proposed
+# `SET app.tenant_id = '{tenant}'` would be string interpolation into
+# SQL and a session-level setting that outlives the request on a pooled
+# connection — the next borrower would inherit somebody else's tenant.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class SubmitRequest(BaseModel):
+    pred_request_id: str
+    patient_name: str
+    payer_id: str
+    payer_name: str
+    submission_method: str = "manual"
+    notes: str | None = None
+
+
+@router.post("/decisions/{pred_request_id}/submit")
+async def submit_pred(
+    pred_request_id: str,
+    req: SubmitRequest,
+    request: Request,
+    claims=Depends(require_claims),
+) -> dict:
+    """Record that a pre-D went to the payer.
+
+    ⚠ IT DOES NOT GO TO THE PAYER. X12 278 is not wired and neither is
+    NEA FastAttach; this writes the event a practice needs to answer
+    "when did we send it and who sent it", which is what nothing could
+    answer before. The response says so rather than implying a
+    transmission happened.
+    """
+    owner = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, owner)
+    # accord_admin has no tenant of their own; write under the pre-D's.
+    tenant = tenant_filter(claims) or owner
+    _, os_pool = _pools(request)
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO submission_events
+            (tenant_id, pred_request_id, patient_name, payer_id,
+             payer_name, submitted_by, submission_method, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT (tenant_id, pred_request_id) DO UPDATE
+            SET submitted_at = NOW(),
+                status = 'submitted',
+                submission_method = EXCLUDED.submission_method,
+                notes = EXCLUDED.notes
+        RETURNING submission_id, submitted_at, status,
+                  expected_response_days
+        """,
+        tenant, pred_request_id, req.patient_name, req.payer_id,
+        req.payer_name, claims.get("sub"), req.submission_method, req.notes,
+    )
+    if not rows:
+        raise HTTPException(500, "submission was not recorded")
+    row = rows[0]
+    return {
+        "status": "submitted",
+        "submission_id": row["submission_id"],
+        "submitted_at": _iso(row["submitted_at"]),
+        "pred_request_id": pred_request_id,
+        "message": (
+            f"Submission to {req.payer_name} recorded. Expected response "
+            f"in {row['expected_response_days']} business days. Nothing "
+            f"was transmitted - X12 278 is not connected."
+        ),
+    }
+
+
+def _days_until(when) -> Optional[int]:
+    return (when.date() - date.today()).days if when else None
+
+
+@router.get("/denials")
+async def get_denials(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> list[dict]:
+    """Payer denials for this practice, newest first."""
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT d.denial_id, d.pred_request_id, d.patient_name, d.payer_id,
+               d.denied_at, d.denial_reason, d.denial_reason_code,
+               d.denied_amount, d.appeal_deadline, d.appeal_viable,
+               d.appeal_probability, d.notes,
+               EXISTS (
+                 SELECT 1 FROM appeal_events a
+                 WHERE a.pred_request_id = d.pred_request_id
+                   AND a.tenant_id = d.tenant_id
+               ) AS appeal_filed
+        FROM denial_events d
+        WHERE d.tenant_id = $1
+        ORDER BY d.denied_at DESC
+        """,
+        tenant,
+    )
+    return [
+        {
+            **r,
+            "payer_name": _payer_name(r["payer_id"]),
+            "denied_at": _iso(r["denied_at"]),
+            "appeal_deadline": _iso(r["appeal_deadline"]),
+            "days_to_deadline": _days_until(r["appeal_deadline"]),
+            "denied_amount": _f(r["denied_amount"]),
+        }
+        for r in rows
+    ]
+
+
+class AppealRequest(BaseModel):
+    pred_request_id: str
+    patient_name: str
+    payer_id: str
+    denial_id: str | None = None
+    appeal_type: str = "standard"
+    notes: str | None = None
+
+
+@router.post("/appeals")
+async def file_appeal(
+    req: AppealRequest, request: Request, claims=Depends(require_claims)
+) -> dict:
+    """File an appeal against a denied pre-D."""
+    # Not in the brief, and the same boundary every other write has:
+    # without it a biller could file an appeal onto another practice's
+    # case by posting its id.
+    owner = await _tenant_for(request, req.pred_request_id)
+    assert_tenant_allowed(claims, owner)
+    tenant = tenant_filter(claims) or owner
+    _, os_pool = _pools(request)
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO appeal_events
+            (tenant_id, pred_request_id, denial_id, patient_name,
+             payer_id, filed_by, appeal_type, status, notes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'filed',$8)
+        ON CONFLICT (tenant_id, pred_request_id) DO NOTHING
+        RETURNING appeal_id, filed_at, status
+        """,
+        tenant, req.pred_request_id, req.denial_id, req.patient_name,
+        req.payer_id, claims.get("sub"), req.appeal_type, req.notes,
+    )
+
+    if not rows:
+        # ON CONFLICT DO NOTHING returns NO ROW. The brief then reads
+        # row['appeal_id'] off it, which is a 500 the second time
+        # anyone clicks. An appeal already on file is not an error -
+        # say which one it is.
+        existing = await execute_os_with_tenant(
+            os_pool, tenant,
+            "SELECT appeal_id, filed_at, status FROM appeal_events "
+            "WHERE tenant_id = $1 AND pred_request_id = $2",
+            tenant, req.pred_request_id,
+        )
+        if not existing:
+            raise HTTPException(500, "appeal was not recorded")
+        row = existing[0]
+        return {
+            "status": row["status"],
+            "appeal_id": row["appeal_id"],
+            "filed_at": _iso(row["filed_at"]),
+            "message": "An appeal is already on file for this pre-D.",
+            "already_filed": True,
+        }
+
+    row = rows[0]
+    return {
+        "status": "filed",
+        "appeal_id": row["appeal_id"],
+        "filed_at": _iso(row["filed_at"]),
+        "message": "Appeal recorded. Nothing was sent to the payer.",
+        "already_filed": False,
+    }
+
+
+@router.get("/appeals")
+async def get_appeals(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> list[dict]:
+    """Appeals for this practice, newest first, with their denial."""
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT a.appeal_id, a.pred_request_id, a.patient_name, a.payer_id,
+               a.filed_at, a.appeal_type, a.status, a.resolved_at,
+               a.recovered_amount, a.notes,
+               d.denial_reason, d.denied_amount, d.appeal_probability,
+               d.appeal_deadline
+        FROM appeal_events a
+        LEFT JOIN denial_events d
+               ON d.denial_id = a.denial_id AND d.tenant_id = a.tenant_id
+        WHERE a.tenant_id = $1
+        ORDER BY a.filed_at DESC
+        """,
+        tenant,
+    )
+    return [
+        {
+            **r,
+            "payer_name": _payer_name(r["payer_id"]),
+            "filed_at": _iso(r["filed_at"]),
+            "resolved_at": _iso(r["resolved_at"]),
+            "appeal_deadline": _iso(r["appeal_deadline"]),
+            "days_to_deadline": _days_until(r["appeal_deadline"]),
+            "denied_amount": _f(r["denied_amount"]),
+            # None, not 0.0: an unresolved appeal has recovered nothing
+            # YET, which is a different fact from recovering zero.
+            "recovered_amount": (
+                _f(r["recovered_amount"])
+                if r["recovered_amount"] is not None
+                else None
+            ),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/analytics/billing")
+async def billing_analytics(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> dict:
+    """What revenue ops needs on one screen.
+
+    Two different notions of "denied" live here and they are NOT the
+    same number, so both are returned under their own names:
+
+      cases.denied     the ENGINE's decision on a pre-D - what the
+                       policy model predicts before anything is sent
+      denials.total    what a payer actually came back and refused,
+                       from denial_events
+
+    The brief reported the engine's count under `denials.total` while
+    listing reasons from denial_events beside it, so the header and the
+    breakdown under it would have disagreed - 7 against 1 today.
+    """
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    sim_pool, os_pool = _pools(request)
+
+    subs = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT COUNT(*) AS total_submitted,
+               COUNT(*) FILTER (WHERE status = 'submitted') AS pending,
+               COUNT(*) FILTER (WHERE status = 'acknowledged') AS acknowledged,
+               COUNT(*) FILTER (WHERE status = 'responded') AS responded
+        FROM submission_events WHERE tenant_id = $1
+        """,
+        tenant,
+    )
+
+    reasons = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT denial_reason,
+               COUNT(*) AS reason_count,
+               COALESCE(SUM(denied_amount), 0) AS reason_amount
+        FROM denial_events WHERE tenant_id = $1
+        GROUP BY denial_reason
+        ORDER BY reason_count DESC
+        """,
+        tenant,
+    )
+
+    dtotals = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT COUNT(*) AS total_denials,
+               COALESCE(SUM(denied_amount), 0) AS total_denied_amount,
+               COUNT(*) FILTER (WHERE appeal_viable) AS appeal_viable
+        FROM denial_events WHERE tenant_id = $1
+        """,
+        tenant,
+    )
+
+    appeals = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT COUNT(*) AS total_appeals,
+               COUNT(*) FILTER (WHERE status = 'overturned') AS overturned,
+               COUNT(*) FILTER (WHERE status = 'upheld') AS upheld,
+               COUNT(*) FILTER (WHERE status IN ('filed','pending')) AS pending,
+               COALESCE(SUM(recovered_amount), 0) AS total_recovered
+        FROM appeal_events WHERE tenant_id = $1
+        """,
+        tenant,
+    )
+
+    # THROUGH fetch_with_tenant, not sim_pool.fetch. A raw pool call
+    # carries no app.tenant_id, and RLS then returns zero rows with no
+    # error - the practice would read as having no cases at all.
+    cases = await fetch_with_tenant(
+        sim_pool, tenant,
+        """
+        SELECT COUNT(*) AS total_cases,
+               COUNT(*) FILTER (WHERE ps.decision = 'approved') AS approved,
+               COUNT(*) FILTER (WHERE ps.decision = 'denied') AS denied,
+               COUNT(*) FILTER (WHERE ps.decision = 'pended') AS pended,
+               COALESCE(SUM(pr.total_case_value), 0) AS total_value
+        FROM pred_requests pr
+        JOIN pred_states ps ON ps.pred_request_id = pr.pred_request_id
+        WHERE pr.tenant_id = $1
+        """,
+        tenant,
+    )
+
+    s = subs[0] if subs else {}
+    d = dtotals[0] if dtotals else {}
+    a = appeals[0] if appeals else {}
+    c = cases[0] if cases else {}
+    filed = int(a.get("total_appeals") or 0)
+    resolved = int(a.get("overturned") or 0) + int(a.get("upheld") or 0)
+
+    return {
+        "submissions": {
+            "total": int(s.get("total_submitted") or 0),
+            "pending": int(s.get("pending") or 0),
+            "acknowledged": int(s.get("acknowledged") or 0),
+            "responded": int(s.get("responded") or 0),
+        },
+        "denials": {
+            "total": int(d.get("total_denials") or 0),
+            "amount": _f(d.get("total_denied_amount")),
+            "appeal_viable": int(d.get("appeal_viable") or 0),
+            "reasons": [
+                {
+                    "reason": r["denial_reason"],
+                    "count": int(r["reason_count"]),
+                    "amount": _f(r["reason_amount"]),
+                }
+                for r in reasons
+            ],
+        },
+        "appeals": {
+            "total": filed,
+            "overturned": int(a.get("overturned") or 0),
+            "upheld": int(a.get("upheld") or 0),
+            "pending": int(a.get("pending") or 0),
+            "recovered": _f(a.get("total_recovered")),
+            # Of those RESOLVED, not of those filed. A 50% "win rate"
+            # counted against pending appeals falls every time one is
+            # filed, which is the opposite of what it should do.
+            "overturn_rate": (
+                round(int(a.get("overturned") or 0) / resolved, 3)
+                if resolved
+                else None
+            ),
+        },
+        "cases": {
+            "total": int(c.get("total_cases") or 0),
+            "approved": int(c.get("approved") or 0),
+            "denied": int(c.get("denied") or 0),
+            "pended": int(c.get("pended") or 0),
+            "total_value": _f(c.get("total_value")),
+        },
     }
