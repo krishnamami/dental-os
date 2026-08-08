@@ -7,6 +7,7 @@ import { ROLE_LABELS, useAuth } from "../../../context/AuthContext";
 import { api, keys } from "../../../hooks/useApi";
 import type { PatientSummary } from "../../../types/dental";
 import { formatCurrency } from "../../../utils/format";
+import { EmailModal, SmsModal } from "./SendModals";
 import { talkingPoints } from "./talkingPoints";
 import {
   COORDINATOR_ITEMS,
@@ -62,6 +63,38 @@ interface CheckInPatient {
   alerts: Alert[];
   status: "heads_up" | "clear" | "checked_in";
   checked_in_at: string | null;
+  /** From patients.email / patients.mobile_phone. Either can be null:
+   *  a practice that never collected a mobile has none to text. */
+  patient_email: string | null;
+  patient_phone: string | null;
+  /** Who is signed in, resolved server-side from the token's `sub` —
+   *  the JWT itself carries neither a name nor an address. */
+  sender_name: string;
+  sender_email: string;
+  practice_email: string;
+  practice_phone: string;
+}
+
+/**
+ * The text a patient gets. One GSM-7 segment if it fits.
+ *
+ * The cost comes from the same /patient-summary total as the table and
+ * the printed sheet, so a patient cannot be told one figure by text
+ * and another on paper.
+ */
+function smsFor(
+  p: CheckInPatient,
+  ps: PatientSummary | undefined,
+  practice: string,
+): string {
+  const cost = ps ? formatCurrency(ps.summary.total_patient_pays) : null;
+  const phone = p.practice_phone || "";
+  return (
+    `Hi ${firstNameOf(p.patient_name)}, your treatment estimate from ` +
+    `${practice} is ready.` +
+    (cost ? ` Your estimated cost: ${cost}.` : "") +
+    (phone ? ` Questions? Call us at ${phone}.` : "")
+  );
 }
 
 // One list, shared with the printed document. Two copies would let a
@@ -229,6 +262,7 @@ function PatientCard({
   const downgrade = ps?.procedures.find((x) => x.downgrade_applied);
   const progress = checked.size;
   const points = useMemo(() => talkingPoints(p, ps), [p, ps]);
+  const [sending, setSending] = useState<"email" | "sms" | null>(null);
 
   return (
     <article className="mb-3 overflow-hidden rounded-xl border border-gray-200 bg-white">
@@ -574,18 +608,72 @@ function PatientCard({
             </button>
             <button
               type="button"
-              onClick={() => {
-                const text = generateEmailText(p, ps, checked, practice, address);
-                navigator.clipboard
-                  ?.writeText(text)
-                  .then(() => onToast("Email content copied ✓"))
-                  .catch(() => onToast("Could not copy — check clipboard permission"));
-              }}
+              onClick={() => setSending("email")}
               className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50"
             >
               Email to patient
             </button>
+            <button
+              type="button"
+              onClick={() => setSending("sms")}
+              disabled={!p.patient_phone}
+              title={
+                p.patient_phone
+                  ? undefined
+                  : "No mobile number on file for this patient"
+              }
+              className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Text to patient
+            </button>
           </div>
+
+          {sending === "email" && (
+            <EmailModal
+              patientName={p.patient_name}
+              patientEmail={p.patient_email}
+              senderName={p.sender_name || "Treatment Coordinator"}
+              senderEmail={p.sender_email}
+              practiceEmail={p.practice_email}
+              practice={practice}
+              defaultSubject={`Your treatment estimate — ${practice}`}
+              // generateEmailText opens with its own "Subject:" line,
+              // which the modal already has a field for. Stripped, or
+              // the patient gets the subject twice.
+              defaultBody={generateEmailText(
+                p,
+                ps,
+                checked,
+                practice,
+                address,
+              ).replace(/^Subject:[^\n]*\n+/, "")}
+              onClose={() => setSending(null)}
+              onToast={onToast}
+            />
+          )}
+
+          {sending === "sms" && (
+            <SmsModal
+              patientName={p.patient_name}
+              patientPhone={p.patient_phone}
+              defaultMessage={smsFor(p, ps, practice)}
+              onClose={() => setSending(null)}
+              onSend={async (message) => {
+                try {
+                  await api.post("/communications/sms", {
+                    pred_request_id: p.pred_request_id,
+                    patient_name: p.patient_name,
+                    patient_phone: p.patient_phone ?? "",
+                    message,
+                  });
+                  onToast(`Text sent to ${firstNameOf(p.patient_name)} ✓`);
+                  setSending(null);
+                } catch {
+                  onToast("Could not send the text — dental-os refused it");
+                }
+              }}
+            />
+          )}
         </>
       )}
     </article>
