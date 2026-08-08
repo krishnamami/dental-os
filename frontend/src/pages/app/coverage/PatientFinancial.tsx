@@ -124,8 +124,32 @@ type Bucket = "ready" | "waiting" | "done";
 
 const BUCKET_LABEL: Record<Bucket, string> = {
   ready: "Ready for consultation",
-  waiting: "Waiting",
-  done: "Consultation done",
+  waiting: "Waiting to arrive",
+  done: "✅ Consultation done today",
+};
+
+/**
+ * Which conversation-checklist item a talking point closes.
+ *
+ * ⚠ KEYED ON THE POINT, NOT ITS POSITION. talkingPoints() returns
+ * between four and eight points depending on what the engine raised —
+ * Robert Thompson gets four, James Mitchell eight — so the brief's
+ * index map (TP0→CL0 … TP6→CL3) lines up for exactly one patient and
+ * silently mis-files the rest. On Robert's card, index 3 is Financing,
+ * not Downgrade.
+ *
+ * The four conditional points map to nothing on purpose. A downgrade,
+ * an exhausted annual maximum, a pre-determination and a bundling
+ * caveat are warnings to raise, not items on the six-step consent
+ * conversation. The brief pointed Downgrade at "Financing options
+ * discussed", which would tick a consent step because a crown is
+ * reimbursed at a cheaper rate — two unrelated things.
+ */
+const TP_TO_CHECKLIST: Record<string, number> = {
+  plan: 0, // Treatment plan explained
+  insurance: 1, // Insurance benefits explained
+  cost: 2, // Estimated patient responsibility reviewed
+  financing: 3, // Financing options discussed
 };
 
 function firstNameOf(full: string): string {
@@ -217,6 +241,59 @@ function StatCard({
   );
 }
 
+/**
+ * Someone who has not arrived yet.
+ *
+ * No tabs and no actions, deliberately. The scripts and the cost table
+ * are for a conversation that cannot start until the front desk checks
+ * them in, and a coordinator who works ahead on a card here is reading
+ * figures that may change before the patient sits down.
+ */
+function WaitingCard({ p }: { p: CheckInPatient }) {
+  return (
+    <article
+      className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-gray-200 bg-white px-5 py-3.5"
+      style={{ opacity: 0.75 }}
+    >
+      <span
+        aria-hidden="true"
+        className="h-2 w-2 flex-shrink-0 rounded-full"
+        style={{ backgroundColor: "#9ca3af" }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm">
+          <span className="font-semibold text-slate-700">{p.patient_name}</span>
+          <span className="text-slate-500">
+            {" "}
+            · {p.appointment_time} · {p.procedure_summary}
+          </span>
+        </p>
+        <p className="mt-0.5 text-[11.5px] text-slate-500">
+          ⏳ Waiting for check-in from front desk
+        </p>
+      </div>
+      <span className="flex-shrink-0 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-500">
+        WAITING
+      </span>
+    </article>
+  );
+}
+
+/** A conversation that has happened. */
+function DoneRow({ p, notified }: { p: CheckInPatient; notified: string }) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-2.5 rounded-xl border border-green-300 bg-green-50 px-4 py-3">
+      <span className="text-[16px]" aria-hidden="true">
+        ✅
+      </span>
+      <div className="min-w-0 flex-1 text-[13px] font-medium text-green-700">
+        {p.patient_name} — consultation complete
+      </div>
+      <div className="text-[11px] text-[#6b7280]">{notified} notified</div>
+    </div>
+  );
+}
+
 function TableSkeleton() {
   return (
     <div className="animate-pulse space-y-2 px-5 py-4">
@@ -242,6 +319,8 @@ function PatientCard({
   onToast,
   tab,
   onTab,
+  tpDone,
+  onToggleTp,
 }: {
   p: CheckInPatient;
   ps?: PatientSummary;
@@ -255,6 +334,9 @@ function PatientCard({
   onToast: (m: string) => void;
   tab: CardTab;
   onTab: (t: CardTab) => void;
+  /** Talking-point keys the coordinator has covered. */
+  tpDone: Set<string>;
+  onToggleTp: (key: string) => void;
 }) {
   // No navigate/demoLink here any more. The card no longer routes
   // anywhere — the coordinator's work ends on this screen.
@@ -358,6 +440,12 @@ function PatientCard({
                   }}
                 >
                   {TAB_LABEL[t]}
+                  {t === "talking" && points.length > 0 && (
+                    <span className="ml-1.5 text-[11px] font-normal text-slate-400">
+                      {points.filter((x) => tpDone.has(x.key)).length}/
+                      {points.length}
+                    </span>
+                  )}
                   {t === "checklist" && (
                     <span className="ml-1.5 text-[11px] font-normal text-slate-400">
                       {progress}/{CHECKLIST.length}
@@ -391,13 +479,33 @@ function PatientCard({
                     >
                       {i + 1}
                     </span>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="mb-[3px] text-[12px] font-semibold text-[#111111]">
                         {tp.label}
                       </p>
                       <p className="text-[12px] italic leading-[1.55] text-[#374151]">
                         {tp.script}
                       </p>
+
+                      {tp.key === "financing" && (
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-2.5">
+                          <span className="text-[12px] text-blue-800">
+                            CareCredit or in-house payment plan available
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onToast(
+                                "Ask front desk for the CareCredit application form",
+                              )
+                            }
+                            className="cursor-pointer rounded-md border-none bg-blue-500 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-blue-600"
+                          >
+                            Apply for financing →
+                          </button>
+                        </div>
+                      )}
+
                       {tp.note && (
                         // Not italic and visually apart, because this is
                         // the one line on the card that must NOT be read
@@ -410,10 +518,30 @@ function PatientCard({
                         </p>
                       )}
                     </div>
+
+                    {/* A real checkbox, not a styled div: it has to be
+                        reachable by keyboard and announced as checked.
+                        A coordinator working through a script with one
+                        hand on the patient's chart uses tab and space. */}
+                    <label className="flex flex-shrink-0 cursor-pointer items-start pt-0.5">
+                      <span className="sr-only">
+                        Covered: {tp.label}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={tpDone.has(tp.key)}
+                        onChange={() => onToggleTp(tp.key)}
+                        className="h-[18px] w-[18px] cursor-pointer rounded border-2 border-gray-300 text-accord-green-900 focus:ring-accord-green-500"
+                      />
+                    </label>
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-[11px] text-gray-400">
+              <p className="mt-2 text-[10px] italic text-[#9ca3af]">
+                ✓ Check each talking point as you cover it — the checklist
+                updates automatically.
+              </p>
+              <p className="mt-1 text-[11px] text-gray-400">
                 Derived from this patient&rsquo;s own coverage — the amber
                 points appear only when the engine raised them.
               </p>
@@ -689,6 +817,43 @@ export default function PatientFinancial() {
   // Per patient, so opening the cost table on one card does not move
   // every other card off its scripts.
   const [tabs, setTabs] = useState<Record<string, CardTab>>({});
+  // Talking points covered, per patient, keyed on the point's own key
+  // rather than its index — see TP_TO_CHECKLIST.
+  const [tpChecks, setTpChecks] = useState<Record<string, Set<string>>>({});
+
+  /**
+   * Tick a talking point, and the checklist item it closes.
+   *
+   * Unticking clears the mapped item too. The two are one thing to a
+   * coordinator: leaving "Treatment plan explained" ticked after they
+   * untick the point that explained it is the checklist telling them
+   * something they just said was not true.
+   */
+  function toggleTp(id: string, key: string) {
+    // Read the direction from the CURRENT state, not from a variable
+    // assigned inside the updater. React may run an updater later than
+    // the line after it — and twice under StrictMode — so a `nowOn`
+    // set in there is still false when the checklist sync reads it.
+    // That is exactly why ticking a point moved its own badge and left
+    // the checklist alone.
+    const nowOn = !(tpChecks[id]?.has(key) ?? false);
+
+    setTpChecks((prev) => {
+      const next = new Set(prev[id] ?? []);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return { ...prev, [id]: next };
+    });
+
+    const item = TP_TO_CHECKLIST[key];
+    if (item === undefined) return;
+    setChecks((prev) => {
+      const next = new Set(prev[id] ?? []);
+      if (nowOn) next.add(item);
+      else next.delete(item);
+      return { ...prev, [id]: next };
+    });
+  }
   const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
 
   // Same key shape as the check-in screen, date included: the two pages
@@ -753,6 +918,20 @@ export default function PatientFinancial() {
         {list.map((p) => {
           const i = patients.indexOf(p);
           const q = summaries[i];
+          // Not arrived: no scripts, no cost table, no actions.
+          if (b === "waiting") {
+            return <WaitingCard key={p.pred_request_id} p={p} />;
+          }
+          // Conversation over: one line.
+          if (b === "done") {
+            return (
+              <DoneRow
+                key={p.pred_request_id}
+                p={p}
+                notified={p.provider_name}
+              />
+            );
+          }
           return (
             <PatientCard
               key={p.pred_request_id}
@@ -773,9 +952,16 @@ export default function PatientFinancial() {
               }
               onComplete={() => {
                 setDoneIds((prev) => new Set(prev).add(p.pred_request_id));
-                flash(`Consultation complete ✓ — ${p.patient_name}`);
+                // p.provider_name, not a hardcoded "Dr. Chinta" — the
+                // same card renders for Tampa, whose clinical team is
+                // Dr. Maria Rodriguez.
+                flash(
+                  `${p.patient_name} consultation complete · ${p.provider_name} notified`,
+                );
               }}
               onToast={flash}
+              tpDone={tpChecks[p.pred_request_id] ?? new Set<string>()}
+              onToggleTp={(key) => toggleTp(p.pred_request_id, key)}
               tab={tabs[p.pred_request_id] ?? "talking"}
               onTab={(t) =>
                 setTabs((prev) => ({ ...prev, [p.pred_request_id]: t }))
