@@ -26,7 +26,7 @@ import logging
 from datetime import date, datetime, time as dtime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.auth import (
@@ -1017,27 +1017,72 @@ def _payer_name(payer_id: str | None) -> str:
     return _PAYER_NAMES.get(payer_id or "", payer_id or "Unknown plan")
 
 
+@router.get("/checkin/dates")
+async def checkin_dates(
+    request: Request, claims=Depends(require_claims_or_demo)
+) -> list[str]:
+    """Every date this practice has a schedule for, newest first.
+
+    Drives the date picker. Capped at 30 because it is a dropdown, not
+    a report — a practice with two years of history would otherwise
+    render 500 options.
+    """
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT DISTINCT appointment_date
+        FROM appointments
+        WHERE tenant_id = $1 AND status <> 'cancelled'
+        ORDER BY appointment_date DESC
+        LIMIT 30
+        """,
+        tenant,
+    )
+    return [r["appointment_date"].isoformat() for r in rows]
+
+
 @router.get("/checkin/today")
 async def checkin_today(
-    request: Request, claims=Depends(require_claims_or_demo)
+    request: Request,
+    # Named `date` in the URL but NOT in Python: this module imports
+    # datetime.date, and a parameter of that name would shadow it —
+    # `date.fromisoformat` two lines down would be a string method
+    # lookup on whatever the caller sent.
+    date_param: str | None = Query(None, alias="date"),
+    claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
-    """Today's patients, pre-computed for the check-in screen."""
+    """One day's patients, pre-computed for the check-in screen.
+
+    Defaults to today. An unparseable ?date is a 422 rather than a
+    silent fall back to today — a screen that quietly shows a different
+    day than the one in its own dropdown is worse than an error.
+    """
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     sim, os_pool = _pools(request)
 
-    # The schedule is the source of "today". A pre-D with no appointment
-    # row is not today's patient, and a cancelled one is not either.
+    if date_param:
+        try:
+            appt_date = date.fromisoformat(date_param)
+        except ValueError:
+            raise HTTPException(422, "date must be YYYY-MM-DD")
+    else:
+        appt_date = date.today()
+
+    # The schedule is the source of the day. A pre-D with no appointment
+    # row is not that day's patient, and a cancelled one is not either.
     appts = await execute_os_with_tenant(
         os_pool, tenant,
         """
         SELECT pred_request_id, appointment_time, procedure_summary
         FROM appointments
         WHERE tenant_id = $1
-          AND appointment_date = CURRENT_DATE
+          AND appointment_date = $2
           AND status <> 'cancelled'
         ORDER BY appointment_time
         """,
-        tenant,
+        tenant, appt_date,
     )
     if not appts:
         return []
@@ -1095,9 +1140,12 @@ async def checkin_today(
 
     checked = await execute_os_with_tenant(
         os_pool, tenant,
+        # The SELECTED day, not today. Looking at yesterday must show
+        # who arrived yesterday — reading today's check-ins against
+        # yesterday's schedule would mark the wrong people present.
         "SELECT pred_request_id, checked_in_at FROM checkin_events "
-        "WHERE tenant_id = $1 AND checkin_day = CURRENT_DATE",
-        tenant,
+        "WHERE tenant_id = $1 AND checkin_day = $2",
+        tenant, appt_date,
     )
     checked_at = {r["pred_request_id"]: r["checked_in_at"] for r in checked}
 
