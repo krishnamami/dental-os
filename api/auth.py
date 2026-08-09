@@ -42,6 +42,8 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from core.db.connection import execute_os_with_tenant
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -440,9 +442,14 @@ def _check(password: str, hashed: str) -> bool:
 
 @router.post("/login", response_model=LoginResponse)
 async def login(req: LoginRequest) -> LoginResponse:
+    # authenticate_user(), not a bare SELECT. `users` is under RLS and
+    # a login has no tenant to scope by — it is the request that
+    # DISCOVERS which tenant the caller belongs to. Unscoped, the
+    # policy returns zero rows and every correct password answers
+    # "Invalid email or password", with nothing in the log to say why.
+    # See migrations/006.
     row = await _pool().fetchrow(
-        "SELECT * FROM users WHERE email = $1 AND active = true",
-        req.email.lower().strip(),
+        "SELECT * FROM authenticate_user($1)", req.email,
     )
     # bcrypt is CPU-bound by design — roughly 100ms at the default cost
     # factor. Awaiting it on the event loop would stall every other
@@ -463,9 +470,12 @@ async def me(claims=Depends(get_claims)) -> LoginResponse:
     """Restore a session, and re-read the user rather than trusting the
     token's copy of their role — a role changed in the database has to
     take effect before the 7-day expiry."""
+    # Same unscoped-by-id read as /impersonate, and the same silent
+    # failure under RLS — but on the path the frontend calls on EVERY
+    # page load, so it would have logged everyone out at their next
+    # refresh rather than at their next login.
     row = await _pool().fetchrow(
-        "SELECT * FROM users WHERE user_id = $1 AND active = true",
-        claims["sub"],
+        "SELECT * FROM get_user_by_id($1)", claims["sub"],
     )
     if not row:
         raise HTTPException(404, "User not found")
@@ -486,9 +496,10 @@ async def me(claims=Depends(get_claims)) -> LoginResponse:
 async def impersonate(
     req: ImpersonateRequest, claims=Depends(require_admin)
 ) -> LoginResponse:
+    # accord_admin impersonates ACROSS tenants by definition, so there
+    # is no tenant to scope this by either.
     row = await _pool().fetchrow(
-        "SELECT * FROM users WHERE user_id = $1 AND active = true",
-        req.user_id,
+        "SELECT * FROM get_user_by_id($1)", req.user_id,
     )
     if not row:
         raise HTTPException(404, "User not found")
@@ -517,14 +528,24 @@ async def list_users(
             raise HTTPException(403, "Admin only")
 
     if tenant_id:
-        rows = await _pool().fetch(
+        # Through the tenant context, so the WHERE clause is no longer
+        # the only thing holding the boundary — the policy has to agree
+        # before the row is visible at all. Belt and braces, in that
+        # order: a future edit that drops the WHERE now returns the
+        # caller's own tenant rather than the whole table.
+        rows = await execute_os_with_tenant(
+            _pool(), tenant_id,
             "SELECT user_id, email, name, role, tenant_id FROM users "
             "WHERE tenant_id = $1 AND active = true ORDER BY role, name",
             tenant_id,
         )
     else:
-        rows = await _pool().fetch(
-            "SELECT user_id, email, name, role, tenant_id FROM users "
-            "WHERE active = true ORDER BY tenant_id NULLS LAST, role, name"
+        # accord_admin only — checked above. This branch lists every
+        # tenant AND the admin's own row, whose tenant_id is NULL;
+        # there is no value of app.tenant_id that returns those, so it
+        # cannot be written as a tenant-scoped query. Scoped instead by
+        # the function: five columns, active users, no password_hash.
+        rows = await execute_os_with_tenant(
+            _pool(), "", "SELECT * FROM list_active_users()"
         )
     return [dict(r) for r in rows]
