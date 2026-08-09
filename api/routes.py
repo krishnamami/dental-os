@@ -32,8 +32,12 @@ from pydantic import BaseModel
 from api.auth import (
     TENANT_CONTACTS,
     assert_tenant_allowed,
+    require_billing,
     require_claims,
     require_clinician,
+    require_clinician_cap,
+    require_document_chase,
+    require_patient_contact,
     require_admin,
     require_claims_or_demo,
     require_practice_admin,
@@ -1950,17 +1954,31 @@ async def practice_settings(
 class SMSRequest(BaseModel):
     pred_request_id: str
     patient_name: str
-    patient_phone: str
     message: str
+    # Optional and CROSS-CHECKED, never used as the destination. The
+    # caller may say which patient they think they are texting; if that
+    # disagrees with the pre-D, the request is refused rather than
+    # quietly sent to whoever the pre-D belongs to.
+    patient_id: str | None = None
+    # ⚠ ACCEPTED AND IGNORED. The frontend still sends it and Pydantic
+    # would drop an unknown field silently, which would make this look
+    # like it had been removed when it had only been forgotten. Named
+    # here so the next reader sees it is deliberately unused.
+    patient_phone: str | None = None
 
 
 @router.post("/communications/sms")
 async def send_sms(
     req: SMSRequest,
     request: Request,
-    claims=Depends(require_claims_or_demo),
+    claims=Depends(require_patient_contact),
 ) -> dict:
     """Text a patient their estimate summary.
+
+    THE DESTINATION COMES FROM THE PATIENT RECORD. It is looked up from
+    the pre-D's own patient row under RLS, and any number in the body
+    is ignored — a caller could otherwise post a colleague's name with
+    their own phone and receive somebody else's treatment costs.
 
     ⚠ NOTHING IS SENT. This logs the message and returns success. AWS
     SNS is not wired: there is no SNS topic, no spend limit, no opt-out
@@ -1971,35 +1989,46 @@ async def send_sms(
       - set an SMS monthly spend limit on the account
       - register an origination identity (10DLC in the US)
       - implement STOP/HELP handling, which is a legal requirement
-      - stop accepting the phone number from the CLIENT and read it
-        from `patients` server-side, exactly as the check-in screen
-        does — see below
 
-    THE NUMBER IN THIS REQUEST IS NOT TRUSTED. It arrives from the
-    browser, so a caller could post any number with any patient's name
-    attached. It is echoed back for the demo but never dialled; the
-    production path must look the number up from the pre-D's own
-    patient row under the caller's tenant.
     """
-    tenant = tenant_filter(claims)
-    if tenant:
-        # Same boundary as every other route: you may only message a
-        # patient whose pre-D belongs to your practice.
-        owner = await _tenant_for(request, req.pred_request_id)
-        assert_tenant_allowed(claims, owner)
+    # Resolve the owning practice FIRST and unconditionally. Guarding
+    # only when tenant_filter() is truthy skipped the check for
+    # accord_admin (who has no tenant of their own), and left `owner`
+    # undefined for them — the patient lookup below would then have
+    # fallen back to DEFAULT_TENANT and read the wrong practice.
+    owner = await _tenant_for(request, req.pred_request_id)
+    assert_tenant_allowed(claims, owner)
+    tenant = tenant_filter(claims) or owner
 
     if len(req.message) > 320:
         raise HTTPException(422, "message is longer than two SMS segments")
 
-    # PRODUCTION — read the number from the database, not the request:
-    #
-    # sim, _ = _pools(request)
-    # rows = await fetch_with_tenant(
-    #     sim, owner,
-    #     "SELECT p.mobile_phone FROM patients p "
-    #     "JOIN pred_requests pr ON pr.patient_id = p.patient_id "
-    #     "WHERE pr.pred_request_id = $1", req.pred_request_id)
-    # to_number = rows[0]["mobile_phone"] if rows else None
+    # ── The destination, from the record ────────────────────────────
+    sim, _ = _pools(request)
+    rows = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT p.patient_id, p.mobile_phone, "
+        "       p.first_name || ' ' || p.last_name AS patient_name "
+        "FROM pred_requests pr JOIN patients p ON p.patient_id = pr.patient_id "
+        "WHERE pr.pred_request_id = $1",
+        req.pred_request_id,
+    )
+    if not rows:
+        raise HTTPException(404, "Not found")
+    patient = rows[0]
+    if req.patient_id and req.patient_id != patient["patient_id"]:
+        raise HTTPException(
+            422,
+            "patient_id does not match the patient on this pre-D",
+        )
+    to_number = patient["mobile_phone"]
+    if not to_number:
+        raise HTTPException(
+            422,
+            f"No mobile number on file for {patient['patient_name']}",
+        )
+
+    # PRODUCTION — to_number above is already the record's own number:
     #
     # import boto3
     # sns = boto3.client("sns", region_name="us-east-1")
@@ -2026,8 +2055,9 @@ async def send_sms(
     )
     return {
         "status": "logged",
-        "to": req.patient_phone,
-        "patient": req.patient_name,
+        # The number actually resolved, not the one that was sent.
+        "to": to_number,
+        "patient": patient["patient_name"],
         "note": (
             "Demo mode — nothing was sent. AWS SNS is not connected; "
             "see send_sms() for what production needs first."
@@ -2256,9 +2286,9 @@ class AppealRequest(BaseModel):
 
 @router.post("/appeals")
 async def file_appeal(
-    req: AppealRequest, request: Request, claims=Depends(require_claims)
+    req: AppealRequest, request: Request, claims=Depends(require_billing)
 ) -> dict:
-    """File an appeal against a denied pre-D."""
+    """File an appeal against a denied pre-D. Billing and admin only."""
     # Not in the brief, and the same boundary every other write has:
     # without it a biller could file an appeal onto another practice's
     # case by posting its id.
@@ -2980,7 +3010,7 @@ async def save_narrative(
     pred_request_id: str,
     req: NarrativeRequest,
     request: Request,
-    claims=Depends(require_clinician),
+    claims=Depends(require_clinician_cap),
 ) -> dict:
     """Save the dentist's narrative. One live version per pre-D."""
     tenant = await _tenant_for(request, pred_request_id)
@@ -3027,7 +3057,7 @@ async def save_justification(
     pred_request_id: str,
     req: JustificationRequest,
     request: Request,
-    claims=Depends(require_clinician),
+    claims=Depends(require_clinician_cap),
 ) -> dict:
     """Record why a criterion the engine could not confirm is met.
 
@@ -3094,7 +3124,7 @@ async def create_document_requests(
     pred_request_id: str,
     req: DocumentRequestsRequest,
     request: Request,
-    claims=Depends(require_clinician),
+    claims=Depends(require_document_chase),
 ) -> dict:
     """Ask whoever holds the records for what is missing.
 

@@ -181,6 +181,69 @@ async def require_admin(claims=Depends(get_claims)) -> dict:
     return claims
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Capabilities.
+#
+# One dependency per CAPABILITY, not per endpoint: two routes that
+# answer the same question about a caller share the same guard, so the
+# answer cannot drift between them.
+#
+# ⚠ THESE READ THE EFFECTIVE ROLE, WHICH IS THE POINT. make_token()
+# stamps the IMPERSONATED user's role, so an accord_admin viewing as a
+# treatment coordinator carries role=tx_coord and is refused clinical
+# writes. "accord_admin passes everything" therefore applies to an
+# admin acting AS THEMSELVES only. Reading the real identity out of
+# `impersonated_by` here would hand every admin a clinician's
+# signature the moment they used "view as", which is the opposite of
+# what impersonation is for.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _capability(name: str, roles: tuple[str, ...], message: str):
+    """Build a dependency that admits `roles`, plus accord_admin."""
+    allowed = set(roles) | {"accord_admin"}
+
+    async def dependency(claims=Depends(get_claims)) -> dict:
+        if claims.get("role") in allowed:
+            return claims
+        raise HTTPException(403, message)
+
+    dependency.__name__ = name
+    return dependency
+
+
+# Writing to the clinical record: a narrative, a justification, an
+# attestation. Requires clinical judgement to be answerable for.
+require_clinician_cap = _capability(
+    "require_clinician_cap",
+    ("dentist",),
+    "Only a clinician can write to the clinical record on this pre-D",
+)
+
+# Acting on a payer relationship: filing an appeal. Billing's job.
+require_billing = _capability(
+    "require_billing",
+    ("revenue_ops",),
+    "Only billing can act on a payer appeal",
+)
+
+# Contacting a patient. Everyone who speaks to patients, which is not
+# the clinician's exclusive province.
+require_patient_contact = _capability(
+    "require_patient_contact",
+    ("front_desk", "tx_coord", "revenue_ops"),
+    "This role does not contact patients",
+)
+
+# Chasing a missing document. A coordinator doing this is a real
+# workflow, so it is deliberately wider than the clinical writes.
+require_document_chase = _capability(
+    "require_document_chase",
+    ("dentist", "tx_coord"),
+    "Only a clinician or a treatment coordinator can request documents",
+)
+
+
 async def require_clinician(claims=Depends(get_claims)) -> dict:
     """Only a clinician may write to the clinical record.
 
