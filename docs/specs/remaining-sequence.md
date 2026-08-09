@@ -1,5 +1,10 @@
 # Remaining sequence — five sessions
 
+> **Status, 9 Aug 2026.** Session 1 is DONE (handoff write path, attest
+> endpoint, `require_engine_feedback`, CloudFront SPA fallback, greeting) and
+> so is the follow-on that split sign from submit in the UI. Corrections are
+> marked ⟳ inline. Sessions 2–5 are untouched and still to run.
+
 Fresh Claude Code session for each. Close other sessions first (auto-update has been
 failing with `claude.exe in use`), and don't carry context between these.
 
@@ -46,9 +51,9 @@ Add POST /decisions/:id/attest — clinician-only, writes clinical_attestations
 without filing a submission. Reuse the attested:true path from /submit rather
 than duplicating the logic.
 
-Do NOT change WorkbenchClinicalView's buttons. Whether the dentist signs and
-Kim submits, or the dentist does both, is a workflow decision I haven't made.
-The endpoint is useful either way; the UI change isn't.
+⟳ RESOLVED. The dentist signs, Kim submits. WorkbenchClinicalView's primary
+button is "Sign" and posts to /attest; it no longer submits at all. /submit
+still accepts attested:true at the API level.
 
 Verify the blocked → READY transition end to end with drchinta@ and billing@ —
 it has only ever been tested by writing the attestation row directly.
@@ -72,9 +77,11 @@ user's name.
 
 --- Then ---
 
-Confirm require_engine_feedback actually landed on all three call sites
-(ConditionsManager, ConditionsPanel, FeedbackBar) — it was approved but never
-appeared in a report.
+⟳ DONE. require_engine_feedback was never built at the time this was written
+— it had been proposed, not approved. It now exists and gates
+POST /decisions/:id/feedback: revenue_ops and dentist pass, front_desk,
+tx_coord and dso_owner get 403. All three call sites are reached only by
+revenue_ops or dentist, verified against the ALB.
 
 Then grade all 9 acceptance criteria in the spec, which you can now read.
 Pass, fail, or not verifiable, and how you tested each. Include cross-tenant
@@ -142,7 +149,7 @@ Sweep all of them:
   - Kim's submit anyway override
   - Kim's file appeal
   - Kim's two notify buttons
-  - Dentist attest-and-submit
+  - ⟳ Dentist SIGN (posts /attest — no longer submits)
   - Dentist justification save and narrative autosave
 
 For each: revert on failure, surface a persistent error state on the card
@@ -200,9 +207,9 @@ Two things.
 
 ---
 
-## Decision still outstanding
+## Decision — SETTLED 9 Aug 2026
 
-Does the dentist attest and Kim submit, or does the dentist do both? The attest
-endpoint from session 1 is stranded until you answer, and the workbench's primary
-button changes depending on which. Worth settling before session 3 touches those
-mutations.
+The dentist attests, Kim submits. Attestation is a clinical act; transmission
+is administrative. Shipped: the workbench's primary button is "Sign", the
+dentist's queue shows SIGNED TODAY rather than SUBMITTED TODAY, and a signed
+case appears as READY on Kim's screen with no redeploy.

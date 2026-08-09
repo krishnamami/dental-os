@@ -386,6 +386,68 @@ async def submitted_on(
     return [{**r, "submitted_at": _iso(r["submitted_at"])} for r in rows]
 
 
+@router.get("/decisions/signed")
+async def signed_on(
+    request: Request,
+    date_param: str | None = Query(None, alias="date"),
+    claims=Depends(require_claims_or_demo),
+) -> list[dict]:
+    """Pre-Ds a clinician SIGNED on one day. Defaults to today.
+
+    The dentist's counterpart to /decisions/submitted. The two are
+    deliberately different lists now that signing and filing are
+    different acts by different people: a case the dentist signed this
+    morning may not go to the payer until Kim works her queue this
+    afternoon, and the dentist's screen should show what HE did, not
+    what happened to it afterwards.
+
+    DISTINCT ON because clinical_attestations is append-only — a
+    re-signed pre-D has more than one row and would otherwise appear
+    twice in a list of five.
+    """
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    _, os_pool = _pools(request)
+
+    if date_param:
+        try:
+            on = date.fromisoformat(date_param)
+        except ValueError:
+            raise HTTPException(422, "date must be YYYY-MM-DD")
+    else:
+        on = date.today()
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT DISTINCT ON (a.pred_request_id)
+               a.attestation_id, a.pred_request_id, a.attested_by,
+               a.attested_at, a.submission_id,
+               u.name AS attested_by_name,
+               s.submitted_at
+        FROM clinical_attestations a
+        LEFT JOIN users u ON u.user_id = a.attested_by
+        LEFT JOIN submission_events s
+               ON s.tenant_id = a.tenant_id
+              AND s.pred_request_id = a.pred_request_id
+        WHERE a.tenant_id = $1 AND a.attested_at::date = $2
+        ORDER BY a.pred_request_id, a.attested_at DESC
+        """,
+        tenant, on,
+    )
+    return [
+        {
+            "attestation_id": r["attestation_id"],
+            "pred_request_id": r["pred_request_id"],
+            "attested_by": r["attested_by"],
+            "attested_by_name": r["attested_by_name"],
+            "attested_at": _iso(r["attested_at"]),
+            # Whether Kim has filed it yet. NULL means signed and
+            # waiting, which is the normal state for most of the day.
+            "submitted_at": _iso(r["submitted_at"]),
+        }
+        for r in rows
+    ]
+
 
 # ─────────────────────────────────────────────────────────────────────
 # needs_clinician — does this case want the dentist before it goes out?
