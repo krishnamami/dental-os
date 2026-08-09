@@ -616,6 +616,21 @@ async def decisions_queue(
             j["signal_code"]
         )
 
+    # Who has actually signed. One query for the page. clinical_
+    # attestations is append-only, so the LATEST row is the live one —
+    # DISTINCT ON rather than a plain select, or a re-signed pre-D
+    # would return two rows and double-count.
+    att_rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT DISTINCT ON (pred_request_id) pred_request_id, attested_by, "
+        "       attested_at "
+        "FROM clinical_attestations "
+        "WHERE tenant_id = $1 AND pred_request_id = ANY($2::text[]) "
+        "ORDER BY pred_request_id, attested_at DESC",
+        tenant, list(order),
+    )
+    attested_by_id = {a["pred_request_id"]: a for a in att_rows}
+
     handoff_rows = await execute_os_with_tenant(
         os_pool, tenant,
         "SELECT DISTINCT ON (pred_request_id) pred_request_id, handoff_id, "
@@ -667,7 +682,20 @@ async def decisions_queue(
             "status": decision,
             "open": len(conditions),
             "blocking": blocking.get(rid, 0),
+            # The ENGINE's verdict, unchanged: every open condition is
+            # cleared. It says nothing about whether a human signed,
+            # which is why `attested` is a separate field rather than
+            # folded into this one — the dentist's queue and the
+            # needs_clinician filter both read submission_ready and
+            # neither of them means "signed".
             "submission_ready": bool(row["submission_ready"]),
+            # Has a clinician put their name to this. A pre-D can be
+            # transmitted without it; the billing screen shows that as
+            # blocked-on-clinical rather than refusing the submission.
+            "attested": rid in attested_by_id,
+            "attested_at": _iso(attested_by_id[rid]["attested_at"])
+            if rid in attested_by_id
+            else None,
             # When the case entered the queue, so a biller can see what
             # has been sitting. submitted_at is NULL on every row in
             # this corpus — nothing has ever been sent — so a client
@@ -819,7 +847,8 @@ async def get_conditions(
     # never 403, which would confirm the record exists and turn this
     # route into an id-enumeration oracle. Cached, so this costs one
     # lookup per pre-D per process.
-    assert_tenant_allowed(claims, await _tenant_for(request, pred_request_id))
+    owner = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, owner)
     bundle, outputs = await _read_current_bundle(request, pred_request_id)
     if bundle is None:
         # Reuse the T-33 path so a cold pre-D computes rather than 404s.
@@ -859,6 +888,45 @@ async def get_conditions(
             wave=s.get("wave"),
             decision_id=s.get("decision_id"),
             data=s.get("data") or {},
+        ))
+
+    # ── The one condition the engine cannot raise ───────────────────
+    # Attestation is not a signal: no persona emits it, because it is
+    # not a fact about the case, it is a fact about whether a human has
+    # signed. It belongs in this list all the same — "why is this not
+    # ready" is exactly the question this endpoint answers, and without
+    # it a biller sees a case with every box ticked and no explanation
+    # for why nobody has stood behind it.
+    #
+    # assignee is `dentist`, so every client that groups by owner files
+    # it under clinical and read-only automatically.
+    _, os_pool = _pools(request)
+    signed = await execute_os_with_tenant(
+        os_pool, owner,
+        "SELECT 1 FROM clinical_attestations "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 LIMIT 1",
+        owner, pred_request_id,
+    )
+    if not signed:
+        conditions.append(Condition(
+            signal_code="CLINICAL_ATTESTATION_MISSING",
+            finding=(
+                "Awaiting clinician attestation. No dentist has signed "
+                "that the clinical record supports this pre-D. It can "
+                "still be submitted, but nobody has stood behind it."
+            ),
+            mode="human_approval",
+            category="clinical",
+            recommended_action="Ask the treating dentist to review and attest",
+            assignee="dentist",
+            wave=3,
+            # provider_feedback.decision_id is NOT NULL and this signal
+            # has no engine decision behind it. Namespaced rather than
+            # borrowed from a real one, so an override logged against it
+            # reads as what it is and cannot be mistaken for a verdict a
+            # persona actually reached.
+            decision_id=f"attestation:{pred_request_id}",
+            data={},
         ))
 
     # Hardest first: a signature blocks, a task does not. Within each,
@@ -2096,7 +2164,12 @@ class SubmitRequest(BaseModel):
     notes: str | None = None
     # ── The dentist's sign-off ──────────────────────────────────────
     narrative_text: str | None = None
-    attested: bool = False
+    # OPTIONAL, and tri-state on purpose. Absent means "record that this
+    # went out"; true means "and I am signing for it". It defaulted to
+    # False, which made the guard below reject every caller who simply
+    # did not send the field — including the revenue ops queue, whose
+    # submit button has been returning 422 in production.
+    attested: bool | None = None
     # Accepted so the documented contract holds, but NEITHER IS
     # TRUSTED. attested_by is taken from the token and attested_at from
     # the server clock — a signature a caller can address to somebody
@@ -2128,31 +2201,48 @@ async def submit_pred(
     tenant = tenant_filter(claims) or owner
     _, os_pool = _pools(request)
 
-    # ── Nothing goes out unattested ─────────────────────────────────
-    if req.attested is not True:
-        raise HTTPException(
-            422,
-            "attested must be true — a pre-D cannot be submitted without "
-            "a clinician attesting that the record supports it",
-        )
+    # ── Attesting is a separate act from submitting ─────────────────
+    # Recording that a pre-D went to the payer is billing's job and
+    # always was. Signing that the clinical record supports it is the
+    # clinician's, and only that second act is gated. Refusing the
+    # first because the second had not happened did not protect the
+    # attestation — it just stopped anyone from filing anything.
+    #
+    # A pre-D can therefore be transmitted unattested. That is a real
+    # exposure and it is answered by making it VISIBLE rather than
+    # impossible: the queue returns `attested` per row and the billing
+    # screen shows an unattested case as blocked on clinical.
     signer = claims.get("sub")
-    if claims.get("role") not in ("dentist", "accord_admin"):
+    is_clinician = claims.get("role") in ("dentist", "accord_admin")
+    attesting = req.attested is True
+
+    if attesting and not is_clinician:
         raise HTTPException(
             403,
             "Only a clinician can attest a pre-D. A treatment "
             "coordinator or biller cannot sign for clinical judgement.",
         )
-    if req.attested_by and req.attested_by != signer:
+    if attesting and req.attested_by and req.attested_by != signer:
         raise HTTPException(
             422,
             "attested_by does not match the signed-in user; you cannot "
             "attest on someone else's behalf",
         )
+    # Submitting is not a side door onto the clinical record. POST
+    # /decisions/:id/narrative is clinician-only; accepting narrative
+    # text here from a biller would be the same write through a route
+    # that happens not to check.
+    if (req.narrative_text or "").strip() and not is_clinician:
+        raise HTTPException(
+            403,
+            "Only a clinician can write the narrative. Submit without "
+            "narrative_text to record the transmission.",
+        )
 
     # The narrative is stored BEFORE the attestation and copied onto it,
     # so a later edit cannot change what was signed.
     narrative = (req.narrative_text or "").strip()
-    if narrative:
+    if narrative and attesting:
         await execute_os_with_tenant(
             os_pool, tenant,
             """
@@ -2167,7 +2257,7 @@ async def submit_pred(
             """,
             tenant, pred_request_id, narrative, signer,
         )
-    else:
+    elif attesting:
         saved = await execute_os_with_tenant(
             os_pool, tenant,
             "SELECT narrative_text FROM clinical_narratives "
@@ -2198,7 +2288,10 @@ async def submit_pred(
         raise HTTPException(500, "submission was not recorded")
     row = rows[0]
 
-    # Append-only: one row per act of signing, never an upsert.
+    # Append-only: one row per act of signing, never an upsert. Only
+    # written when somebody actually signed — an empty attestation row
+    # would be worse than none, because the queue reads its presence as
+    # the fact that a clinician stood behind this.
     att = await execute_os_with_tenant(
         os_pool, tenant,
         """
@@ -2210,25 +2303,33 @@ async def submit_pred(
         """,
         tenant, pred_request_id, signer, narrative or None,
         ATTESTATION_STATEMENT, row["submission_id"],
-    )
+    ) if attesting else []
 
     return {
         "status": "submitted",
         "submission_id": row["submission_id"],
         "submitted_at": _iso(row["submitted_at"]),
         "pred_request_id": pred_request_id,
-        "attestation": {
-            "attestation_id": att[0]["attestation_id"] if att else None,
-            "attested_by": signer,
-            # Server clock, not the caller's.
-            "attested_at": _iso(att[0]["attested_at"]) if att else None,
-            "statement": ATTESTATION_STATEMENT,
-            "narrative_captured": bool(narrative),
-        },
+        "attested": bool(att),
+        "attestation": (
+            {
+                "attestation_id": att[0]["attestation_id"],
+                "attested_by": signer,
+                # Server clock, not the caller's.
+                "attested_at": _iso(att[0]["attested_at"]),
+                "statement": ATTESTATION_STATEMENT,
+                "narrative_captured": bool(narrative),
+            }
+            if att
+            else None
+        ),
         "message": (
-            f"Submission to {req.payer_name} recorded and attested. "
-            f"Expected response in {row['expected_response_days']} business "
-            f"days. Nothing was transmitted - X12 278 is not connected."
+            f"Submission to {req.payer_name} recorded"
+            + (" and attested. " if att else " WITHOUT a clinician "
+               "attestation. ")
+            + f"Expected response in {row['expected_response_days']} "
+            f"business days. Nothing was transmitted - X12 278 is not "
+            f"connected."
         ),
     }
 

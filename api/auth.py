@@ -229,9 +229,16 @@ require_billing = _capability(
 
 # Contacting a patient. Everyone who speaks to patients, which is not
 # the clinician's exclusive province.
+#
+# dentist is IN, and was the one screen the first cut of this broke: a
+# dentist holds the Patient Financial product and walks the patient
+# through their own estimate on /coverage. What made that safe to allow
+# is not the role list — it is that send_sms() reads the destination off
+# the pre-D's own patient row, so who presses the button can no longer
+# change who receives the text.
 require_patient_contact = _capability(
     "require_patient_contact",
-    ("front_desk", "tx_coord", "revenue_ops"),
+    ("front_desk", "tx_coord", "revenue_ops", "dentist"),
     "This role does not contact patients",
 )
 
