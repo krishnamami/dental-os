@@ -1844,6 +1844,13 @@ async def send_sms(
 # ─────────────────────────────────────────────────────────────────────
 
 
+ATTESTATION_STATEMENT = (
+    "I attest that the clinical record supports the procedures submitted "
+    "and that the narrative accompanying this pre-determination is "
+    "accurate to the best of my clinical judgement."
+)
+
+
 class SubmitRequest(BaseModel):
     pred_request_id: str
     patient_name: str
@@ -1851,6 +1858,17 @@ class SubmitRequest(BaseModel):
     payer_name: str
     submission_method: str = "manual"
     notes: str | None = None
+    # ── The dentist's sign-off ──────────────────────────────────────
+    narrative_text: str | None = None
+    attested: bool = False
+    # Accepted so the documented contract holds, but NEITHER IS
+    # TRUSTED. attested_by is taken from the token and attested_at from
+    # the server clock — a signature a caller can address to somebody
+    # else, or backdate, is not a signature. A mismatch is refused
+    # rather than silently corrected, because a client sending another
+    # user's id is a bug worth surfacing.
+    attested_by: str | None = None
+    attested_at: str | None = None
 
 
 @router.post("/decisions/{pred_request_id}/submit")
@@ -1874,6 +1892,48 @@ async def submit_pred(
     tenant = tenant_filter(claims) or owner
     _, os_pool = _pools(request)
 
+    # ── Nothing goes out unattested ─────────────────────────────────
+    if req.attested is not True:
+        raise HTTPException(
+            422,
+            "attested must be true — a pre-D cannot be submitted without "
+            "a clinician attesting that the record supports it",
+        )
+    signer = claims.get("sub")
+    if req.attested_by and req.attested_by != signer:
+        raise HTTPException(
+            422,
+            "attested_by does not match the signed-in user; you cannot "
+            "attest on someone else's behalf",
+        )
+
+    # The narrative is stored BEFORE the attestation and copied onto it,
+    # so a later edit cannot change what was signed.
+    narrative = (req.narrative_text or "").strip()
+    if narrative:
+        await execute_os_with_tenant(
+            os_pool, tenant,
+            """
+            INSERT INTO clinical_narratives
+                (tenant_id, pred_request_id, narrative_text, source,
+                 written_by)
+            VALUES ($1,$2,$3,'edited',$4)
+            ON CONFLICT (tenant_id, pred_request_id) DO UPDATE
+                SET narrative_text = EXCLUDED.narrative_text,
+                    written_by = EXCLUDED.written_by,
+                    updated_at = NOW()
+            """,
+            tenant, pred_request_id, narrative, signer,
+        )
+    else:
+        saved = await execute_os_with_tenant(
+            os_pool, tenant,
+            "SELECT narrative_text FROM clinical_narratives "
+            "WHERE tenant_id = $1 AND pred_request_id = $2",
+            tenant, pred_request_id,
+        )
+        narrative = saved[0]["narrative_text"] if saved else ""
+
     rows = await execute_os_with_tenant(
         os_pool, tenant,
         """
@@ -1895,15 +1955,38 @@ async def submit_pred(
     if not rows:
         raise HTTPException(500, "submission was not recorded")
     row = rows[0]
+
+    # Append-only: one row per act of signing, never an upsert.
+    att = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO clinical_attestations
+            (tenant_id, pred_request_id, attested_by, narrative_text,
+             statement, submission_id)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING attestation_id, attested_at
+        """,
+        tenant, pred_request_id, signer, narrative or None,
+        ATTESTATION_STATEMENT, row["submission_id"],
+    )
+
     return {
         "status": "submitted",
         "submission_id": row["submission_id"],
         "submitted_at": _iso(row["submitted_at"]),
         "pred_request_id": pred_request_id,
+        "attestation": {
+            "attestation_id": att[0]["attestation_id"] if att else None,
+            "attested_by": signer,
+            # Server clock, not the caller's.
+            "attested_at": _iso(att[0]["attested_at"]) if att else None,
+            "statement": ATTESTATION_STATEMENT,
+            "narrative_captured": bool(narrative),
+        },
         "message": (
-            f"Submission to {req.payer_name} recorded. Expected response "
-            f"in {row['expected_response_days']} business days. Nothing "
-            f"was transmitted - X12 278 is not connected."
+            f"Submission to {req.payer_name} recorded and attested. "
+            f"Expected response in {row['expected_response_days']} business "
+            f"days. Nothing was transmitted - X12 278 is not connected."
         ),
     }
 
@@ -2199,4 +2282,656 @@ async def billing_analytics(
             "pended": int(c.get("pended") or 0),
             "total_value": _f(c.get("total_value")),
         },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# The dentist's workbench — migrations/004.
+#
+# ── The bucket mapping ───────────────────────────────────────────────
+#
+# Three buckets were asked for; the corpus uses 44 distinct signal
+# codes and three buckets leave 16 of them homeless, so there is a
+# fourth. The roll-ups and the portfolio signals are deliberately NOT
+# bucketed:
+#
+#   PRED_*        wave 4, and not findings at all — they are summaries
+#                 OF the other findings. Bucketing them double-counts
+#                 every case. They drive the header instead.
+#   PORTFOLIO_*   practice-level, dso_manager-owned, identical on all
+#                 40 bundles. Not a chairside concern; dropped.
+#
+# ── Ownership uses owner_team, not assignee ──────────────────────────
+#
+# Revenue Ops keys its billing/front-desk/clinical split on `assignee`.
+# That field says `provider` on 83 signals across the corpus, which the
+# fallback maps to "clinical" — so COVERAGE_PRED_REQUIRED (40 of 40
+# cases), COVERAGE_DOWNGRADE_APPLIED and COVERAGE_BUNDLING_CONFLICT all
+# read as the dentist's work when they are billing's. `owner_team` is
+# the field that means whose job it is, and it is what the buckets use.
+# Kim's screen still uses `assignee`; the two disagree until that is
+# reconciled, which is a frontend change and not this prompt.
+# ─────────────────────────────────────────────────────────────────────
+
+CLINICAL_SUPPORT = "clinical_support"
+DOCUMENTATION_GAPS = "documentation_gaps"
+PAYER_FRICTION = "payer_friction"
+INTEGRITY_PROVIDER = "integrity_provider"
+
+BUCKET_LABEL = {
+    CLINICAL_SUPPORT: "Clinical support",
+    DOCUMENTATION_GAPS: "Documentation gaps",
+    PAYER_FRICTION: "Payer friction",
+    INTEGRITY_PROVIDER: "Integrity and provider",
+}
+
+# Prefix rules, not a 44-line literal: the corpus grows a signal code
+# most sprints, and a list would silently drop each new one into
+# "unbucketed" until somebody noticed.
+_BUCKET_PREFIXES = (
+    ("CLINICAL_", CLINICAL_SUPPORT),
+    ("DOC_", DOCUMENTATION_GAPS),
+    ("DOCUMENTATION_", DOCUMENTATION_GAPS),
+    ("COVERAGE_", PAYER_FRICTION),
+    ("ELIG_", PAYER_FRICTION),
+    ("ELIGIBILITY_", PAYER_FRICTION),
+    ("APPEAL_", PAYER_FRICTION),
+    ("FRAUD_", INTEGRITY_PROVIDER),
+    ("INTEGRITY_", INTEGRITY_PROVIDER),
+    ("PROVIDER_", INTEGRITY_PROVIDER),
+)
+
+# Roll-ups: the header, never a bucket.
+_ROLLUP_PREFIX = "PRED_"
+# Practice-level: not shown chairside at all.
+_PORTFOLIO_PREFIX = "PORTFOLIO_"
+
+
+def bucket_of(signal_code: str) -> Optional[str]:
+    """Which bucket a signal belongs in, or None if it is not one."""
+    if signal_code.startswith(_PORTFOLIO_PREFIX):
+        return None
+    if signal_code.startswith(_ROLLUP_PREFIX):
+        return None
+    for prefix, bucket in _BUCKET_PREFIXES:
+        if signal_code.startswith(prefix):
+            return bucket
+    return None
+
+
+# A signal is SATISFIED when the engine is not asking for anything.
+# There is no boolean on the payload saying so — "met" is encoded by
+# naming convention in the code's suffix plus membership of
+# open_conditions, and the two are checked together rather than trusting
+# either alone.
+_SATISFIED_SUFFIXES = (
+    "_VERIFIED", "_MET", "_COMPLETE", "_READY_TO_SUBMIT", "_NOT_VIABLE",
+)
+
+
+def _is_satisfied(signal_code: str, open_codes: set[str]) -> bool:
+    if signal_code in open_codes:
+        return False
+    if signal_code.endswith("_NOT_MET"):
+        return False
+    return any(signal_code.endswith(s) for s in _SATISFIED_SUFFIXES)
+
+
+def _tooth_phrase(teeth: list[int]) -> str:
+    if not teeth:
+        return ""
+    if len(teeth) == 1:
+        return f"tooth #{teeth[0]}"
+    return "teeth #" + ", #".join(str(t) for t in teeth[:-1]) + f" and #{teeth[-1]}"
+
+
+def _fmt_date(value) -> Optional[str]:
+    """'2026-08-05' -> '5 August 2026'. Returns None on anything else."""
+    if not value:
+        return None
+    try:
+        d = date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+    return f"{d.day} {d.strftime('%B')} {d.year}"
+
+
+def _draft_narrative(
+    procedures: list[dict],
+    evidence: list[dict],
+    guidelines: dict[str, dict],
+    frequency: list[dict],
+) -> tuple[Optional[str], Optional[str]]:
+    """Two to four sentences of plain clinical prose, and why not if not.
+
+    Returns (draft, reason_when_none). A case with nothing clinical to
+    state gets no draft and says so — a prophylaxis needs no narrative,
+    and inventing one would put words in a dentist's mouth to fill a
+    box.
+
+    ⚠ THE REGISTER IS MY CHOICE. The three examples meant to set it live
+    in DentistWorkbench.jsx, which is in none of the three repos. This
+    follows the written instruction instead: declarative, measurements
+    with units, the ADA threshold named where one applies, and no
+    "appears to" / "may indicate" / "suggestive of". A payer reads
+    hedging as doubt.
+    """
+    if not procedures:
+        return None, "no procedure lines on this pre-D"
+
+    by_type: dict[str, dict] = {}
+    for e in evidence:
+        by_type.setdefault(e["document_type"], e)
+
+    xray = by_type.get("XRAY_PA") or by_type.get("XRAY_BITEWING")
+    xf = _json(xray.get("extracted_fields"), {}) if xray else {}
+    teeth = sorted({
+        p["tooth_number"] for p in procedures if p.get("tooth_number")
+    })
+    codes = [p["cdt_code"] for p in procedures]
+    tooth_txt = _tooth_phrase(teeth)
+    sentences: list[str] = []
+
+    # 1 — the finding, in the radiograph's own words.
+    pathology = xf.get("pathology")
+    if pathology:
+        names_tooth = any(f"#{t}" in pathology for t in teeth)
+        tail = "" if names_tooth or not tooth_txt else f" at {tooth_txt}"
+        sentences.append(f"{pathology.rstrip('.')}{tail}.")
+
+    # 2 — the measurement, against the ADA threshold for the lead code.
+    bone_mm = xf.get("bone_loss_mm")
+    taken = _fmt_date(xf.get("xray_date") or xf.get("date_taken"))
+    if bone_mm is not None:
+        lead = next((c for c in codes if c in guidelines), None)
+        g = guidelines.get(lead or "", {})
+        minimum = _json(g.get("clinical_thresholds"), {}).get("bone_loss_mm_min")
+        measured = f"{bone_mm} mm"
+        pct = xf.get("bone_loss_pct")
+        if pct is not None:
+            measured += f" ({pct}%)"
+        clause = (
+            f"A periapical radiograph{f' taken {taken}' if taken else ''} "
+            f"demonstrates {measured} of bone loss at the site"
+        )
+        if minimum is not None and g.get("citation"):
+            clause += f", above the {minimum} mm minimum in {g['citation'].split(';')[0]}"
+        sentences.append(clause + ".")
+    elif xray and taken and not pathology:
+        sentences.append(f"A periapical radiograph was taken {taken}.")
+
+    # 3 — the separation argument, where a payer will bundle.
+    if "D7953" in codes and any(c.startswith("D60") for c in codes):
+        sentences.append(
+            "Ridge preservation grafting was performed at the extraction "
+            "site as a distinct surgical episode, on its own date of "
+            "service, and is documented separately from implant placement."
+        )
+
+    # 4 — what is being restored. Any crown or implant crown, not just
+    # D6065: a D2740 case is the commonest thing a dentist narrates.
+    restorative = [
+        p for p in procedures
+        if p["cdt_code"].startswith("D27") or p["cdt_code"].startswith("D6065")
+    ]
+    if restorative:
+        r = restorative[0]
+        what = (r.get("description") or r["cdt_code"]).strip().rstrip(".")
+        where = f" at tooth #{r['tooth_number']}" if r.get("tooth_number") else ""
+        sentences.append(f"{what} ({r['cdt_code']}) restores function{where}.")
+
+    # 5 — frequency, when that is the whole clinical question. A recall
+    # prophylaxis has no pathology and no radiograph; what a payer wants
+    # is the interval since the last one against the plan's limit.
+    if len(sentences) < 2 and frequency:
+        prior = None
+        for e in evidence:
+            ef = _json(e.get("extracted_fields"), {})
+            for svc in ef.get("prior_services") or []:
+                if svc.get("cdt_code") in codes and svc.get("date_of_service"):
+                    prior = svc
+                    break
+        lim = frequency[0]
+        proc_txt = (procedures[0].get("description") or codes[0]).rstrip(".")
+        if prior:
+            when = _fmt_date(prior["date_of_service"])
+            sentences.append(
+                f"{proc_txt} ({codes[0]}) is a recall service; the most "
+                f"recent on file was {when}."
+            )
+        # frequency_period is stored as "per_year" / "per_24_months",
+        # so the "per " goes in front of the stripped value or it reads
+        # "2 per per_year".
+        period = str(lim["frequency_period"] or "").removeprefix("per_")
+        period = period.replace("_", " ") or "period"
+        sentences.append(
+            f"The plan allows {lim['frequency_count']} per {period}."
+        )
+
+    if len(sentences) < 2:
+        return None, (
+            "not enough clinical evidence on file to draft from — no "
+            "radiographic finding, measurement or restorative procedure"
+        )
+    return " ".join(sentences[:4]), None
+
+
+@router.get("/decisions/{pred_request_id}/clinical")
+async def clinical_view(
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
+) -> dict:
+    """Everything the dentist's workbench needs for one pre-D.
+
+    Three buckets plus integrity, a header built from the wave-4
+    roll-ups, and a narrative drafted from the case's own procedure
+    lines and clinical evidence. Nothing here is stored until the
+    dentist saves it.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    sim, os_pool = _pools(request)
+
+    bundle, outputs = await _read_current_bundle(request, pred_request_id)
+    if bundle is None:
+        raise HTTPException(404, f"no decision bundle for {pred_request_id}")
+    signals = _json(bundle.get("all_signals"), [])
+    snapshot = _json(bundle.get("bundle_snapshot"), {})
+    # _open_condition_codes, NOT snapshot["open_conditions"]. The
+    # snapshot carries pred_states' own list and the two DISAGREE —
+    # A01's snapshot says COVERAGE_PRED_REQUIRED and CLINICAL_XRAY_
+    # REQUIRED are open, the signal-derived list says
+    # ELIG_FREQUENCY_UNVERIFIED and APPEAL_VIABLE. GET /decisions/:id
+    # publishes the derived one, so the dentist view uses it too;
+    # otherwise the same case shows a different set of open items on
+    # two screens.
+    open_codes = set(_open_condition_codes(signals))
+
+    # Saved work, so the screen reopens where the dentist left it.
+    saved_narrative = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT narrative_text, source, updated_at FROM clinical_narratives "
+        "WHERE tenant_id = $1 AND pred_request_id = $2",
+        tenant, pred_request_id,
+    )
+    justified = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT signal_code, justification, updated_at "
+        "FROM clinical_justifications "
+        "WHERE tenant_id = $1 AND pred_request_id = $2",
+        tenant, pred_request_id,
+    )
+    just_by_code = {j["signal_code"]: j for j in justified}
+    requests_open = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT request_id, document_type, signal_code, status, note, "
+        "       requested_at FROM document_requests "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 "
+        "ORDER BY requested_at DESC",
+        tenant, pred_request_id,
+    )
+    requested_types = {
+        r["document_type"] for r in requests_open if r["status"] == "open"
+    }
+    attestations = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT attestation_id, attested_by, attested_at, statement "
+        "FROM clinical_attestations "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 "
+        "ORDER BY attested_at DESC LIMIT 1",
+        tenant, pred_request_id,
+    )
+
+    buckets: dict[str, list[dict]] = {
+        CLINICAL_SUPPORT: [],
+        DOCUMENTATION_GAPS: [],
+        PAYER_FRICTION: [],
+        INTEGRITY_PROVIDER: [],
+    }
+    rollups: list[dict] = []
+    unbucketed: list[str] = []
+
+    for s in signals:
+        code = s.get("signal_code", "")
+        if code.startswith(_PORTFOLIO_PREFIX):
+            continue
+        if code.startswith(_ROLLUP_PREFIX):
+            rollups.append({
+                "signal_code": code,
+                "finding": s.get("finding"),
+                "mode": s.get("mode"),
+                "risk_level": s.get("risk_level"),
+            })
+            continue
+        b = bucket_of(code)
+        if b is None:
+            unbucketed.append(code)
+            continue
+        j = just_by_code.get(code)
+        buckets[b].append({
+            "signal_code": code,
+            "finding": s.get("finding"),
+            "mode": s.get("mode"),
+            "wave": s.get("wave"),
+            # owner_team, NOT assignee — see the note at the top.
+            "owner_team": s.get("owner_team"),
+            "assignee": s.get("assignee"),
+            "risk_level": s.get("risk_level"),
+            "citation": s.get("citation"),
+            "payer_citation": s.get("payer_citation"),
+            "recommended_action": s.get("recommended_action"),
+            "sla_hours": s.get("sla_hours"),
+            "satisfied": _is_satisfied(code, open_codes),
+            "justification": j["justification"] if j else None,
+            "justified_at": _iso(j["updated_at"]) if j else None,
+            "document_requested": any(
+                r["signal_code"] == code and r["status"] == "open"
+                for r in requests_open
+            ),
+        })
+
+    procedures = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT line_no, cdt_code, tooth_number, tooth_surface, fee, "
+        "       description, requires_pred FROM procedure_lines "
+        "WHERE pred_request_id = $1 ORDER BY line_no",
+        pred_request_id,
+    )
+    evidence = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT document_type, document_category, tooth_number, "
+        "       confidence_score, extracted_fields, received_at "
+        "FROM clinical_evidence WHERE pred_request_id = $1",
+        pred_request_id,
+    )
+    codes = [p["cdt_code"] for p in procedures]
+    guide_rows = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT cdt_code, guideline_name, citation, criteria_checklist, "
+        "       clinical_thresholds FROM ada_guidelines "
+        "WHERE cdt_code = ANY($1::text[])",
+        codes,
+    ) if codes else []
+    guidelines = {g["cdt_code"]: dict(g) for g in guide_rows}
+
+    payer_id = snapshot.get("payer_id")
+    frequency = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT cdt_code, frequency_count, frequency_period, waiting_days "
+        "FROM frequency_limits WHERE payer_id = $1 AND cdt_code = ANY($2::text[])",
+        payer_id, codes,
+    ) if (codes and payer_id) else []
+
+    draft, no_draft_reason = _draft_narrative(
+        [dict(p) for p in procedures],
+        [dict(e) for e in evidence],
+        guidelines,
+        [dict(f) for f in frequency],
+    )
+    current = saved_narrative[0] if saved_narrative else None
+
+    return {
+        "pred_request_id": pred_request_id,
+        # From the snapshot — persona_bundles has no patient_name column.
+        "patient_name": snapshot.get("patient_name"),
+        "decision": snapshot.get("decision"),
+        # snapshot["submission_ready"] is null on every bundle. The
+        # verdict lives in the wave-4 signal, read back the same way
+        # GET /decisions/:id reads it.
+        "submission_ready": any(
+            s.get("signal_code") == "PRED_READY_TO_SUBMIT" for s in signals
+        ),
+        # The wave-4 signals, as a header rather than a bucket.
+        "status_rollup": rollups,
+        "buckets": [
+            {
+                "key": key,
+                "label": BUCKET_LABEL[key],
+                "open": sum(1 for x in buckets[key] if not x["satisfied"]),
+                "signals": buckets[key],
+            }
+            for key in (
+                CLINICAL_SUPPORT,
+                DOCUMENTATION_GAPS,
+                PAYER_FRICTION,
+                INTEGRITY_PROVIDER,
+            )
+        ],
+        # Empty in this corpus. Returned anyway so a signal code added
+        # upstream shows up here instead of vanishing from the screen.
+        "unbucketed": unbucketed,
+        "procedures": [
+            {
+                "line_no": p["line_no"],
+                "cdt_code": p["cdt_code"],
+                "tooth_number": p["tooth_number"],
+                "description": p["description"],
+                "fee": _f(p["fee"]),
+                "requires_pred": p["requires_pred"],
+                "ada_citation": (guidelines.get(p["cdt_code"], {}) or {}).get(
+                    "citation"
+                ),
+            }
+            for p in procedures
+        ],
+        "evidence": [
+            {
+                "document_type": e["document_type"],
+                "document_category": e["document_category"],
+                "tooth_number": e["tooth_number"],
+                "confidence_score": _f(e["confidence_score"]),
+                "received_at": _iso(e["received_at"]),
+            }
+            for e in evidence
+        ],
+        "narrative": {
+            "draft": draft,
+            # Why there is nothing to edit, rather than an empty box.
+            "no_draft_reason": no_draft_reason,
+            "saved": current["narrative_text"] if current else None,
+            "source": current["source"] if current else None,
+            "updated_at": _iso(current["updated_at"]) if current else None,
+        },
+        "document_requests": [
+            {
+                "request_id": r["request_id"],
+                "document_type": r["document_type"],
+                "signal_code": r["signal_code"],
+                "status": r["status"],
+                "note": r["note"],
+                "requested_at": _iso(r["requested_at"]),
+            }
+            for r in requests_open
+        ],
+        "requested_types": sorted(requested_types),
+        "attestation": (
+            {
+                "attestation_id": attestations[0]["attestation_id"],
+                "attested_by": attestations[0]["attested_by"],
+                "attested_at": _iso(attestations[0]["attested_at"]),
+                "statement": attestations[0]["statement"],
+            }
+            if attestations
+            else None
+        ),
+    }
+
+
+class NarrativeRequest(BaseModel):
+    narrative_text: str
+    source: str = "edited"
+
+
+@router.post("/decisions/{pred_request_id}/narrative")
+async def save_narrative(
+    pred_request_id: str,
+    req: NarrativeRequest,
+    request: Request,
+    claims=Depends(require_claims),
+) -> dict:
+    """Save the dentist's narrative. One live version per pre-D."""
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    text = req.narrative_text.strip()
+    if not text:
+        raise HTTPException(422, "narrative_text is empty")
+    if req.source not in ("draft", "edited", "authored"):
+        raise HTTPException(422, "source must be draft, edited or authored")
+    _, os_pool = _pools(request)
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO clinical_narratives
+            (tenant_id, pred_request_id, narrative_text, source, written_by)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (tenant_id, pred_request_id) DO UPDATE
+            SET narrative_text = EXCLUDED.narrative_text,
+                source = EXCLUDED.source,
+                written_by = EXCLUDED.written_by,
+                updated_at = NOW()
+        RETURNING narrative_id, source, updated_at
+        """,
+        tenant, pred_request_id, text, req.source, claims.get("sub"),
+    )
+    row = rows[0]
+    return {
+        "status": "saved",
+        "narrative_id": row["narrative_id"],
+        "source": row["source"],
+        "updated_at": _iso(row["updated_at"]),
+        "characters": len(text),
+    }
+
+
+class JustificationRequest(BaseModel):
+    signal_code: str
+    justification: str
+
+
+@router.post("/decisions/{pred_request_id}/justification")
+async def save_justification(
+    pred_request_id: str,
+    req: JustificationRequest,
+    request: Request,
+    claims=Depends(require_claims),
+) -> dict:
+    """Record why a criterion the engine could not confirm is met.
+
+    The signal must actually be on the case. Justifying a code that is
+    not there produces a record nobody can act on and a row that never
+    matches anything on screen.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    text = req.justification.strip()
+    if not text:
+        raise HTTPException(422, "justification is empty")
+
+    bundle, _ = await _read_current_bundle(request, pred_request_id)
+    if bundle is None:
+        raise HTTPException(404, f"no decision bundle for {pred_request_id}")
+    codes = {
+        s.get("signal_code") for s in _json(bundle.get("all_signals"), [])
+    }
+    if req.signal_code not in codes:
+        raise HTTPException(
+            422,
+            f"{req.signal_code} is not a signal on {pred_request_id}",
+        )
+
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO clinical_justifications
+            (tenant_id, pred_request_id, signal_code, justification,
+             justified_by)
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (tenant_id, pred_request_id, signal_code) DO UPDATE
+            SET justification = EXCLUDED.justification,
+                justified_by = EXCLUDED.justified_by,
+                updated_at = NOW()
+        RETURNING justification_id, updated_at
+        """,
+        tenant, pred_request_id, req.signal_code, text, claims.get("sub"),
+    )
+    row = rows[0]
+    return {
+        "status": "saved",
+        "justification_id": row["justification_id"],
+        "signal_code": req.signal_code,
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+class DocumentRequestItem(BaseModel):
+    document_type: str
+    signal_code: str | None = None
+    note: str | None = None
+
+
+class DocumentRequestsRequest(BaseModel):
+    requests: list[DocumentRequestItem]
+    requested_from: str = "front_desk"
+
+
+@router.post("/decisions/{pred_request_id}/document-requests")
+async def create_document_requests(
+    pred_request_id: str,
+    req: DocumentRequestsRequest,
+    request: Request,
+    claims=Depends(require_claims),
+) -> dict:
+    """Ask whoever holds the records for what is missing.
+
+    ⚠ NOTHING IS DELIVERED. This records the ask; there is no channel
+    to the front desk and no inbox at the other end. The row is real
+    and so is the audit trail — the notification is not built.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    if not req.requests:
+        raise HTTPException(422, "requests is empty")
+    if len(req.requests) > 20:
+        raise HTTPException(422, "no more than 20 documents in one request")
+    _, os_pool = _pools(request)
+
+    created = []
+    for item in req.requests:
+        doc = item.document_type.strip()
+        if not doc:
+            raise HTTPException(422, "document_type is empty")
+        rows = await execute_os_with_tenant(
+            os_pool, tenant,
+            """
+            INSERT INTO document_requests
+                (tenant_id, pred_request_id, document_type, signal_code,
+                 requested_from, requested_by, note)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING request_id, document_type, status, requested_at
+            """,
+            tenant, pred_request_id, doc, item.signal_code,
+            req.requested_from, claims.get("sub"), item.note,
+        )
+        r = rows[0]
+        created.append({
+            "request_id": r["request_id"],
+            "document_type": r["document_type"],
+            "status": r["status"],
+            "requested_at": _iso(r["requested_at"]),
+        })
+
+    return {
+        "status": "requested",
+        "pred_request_id": pred_request_id,
+        "requested_from": req.requested_from,
+        "count": len(created),
+        "requests": created,
+        "message": (
+            f"{len(created)} document request(s) recorded for "
+            f"{req.requested_from}. No notification was sent — there is no "
+            f"channel to them yet."
+        ),
     }
