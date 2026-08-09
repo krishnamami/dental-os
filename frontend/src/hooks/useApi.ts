@@ -139,6 +139,7 @@ export const keys = {
   billingAnalytics: ["analytics", "billing"] as const,
   clinicalQueue: (date: string) => ["clinical-queue", date] as const,
   clinical: (id: string) => ["clinical", id] as const,
+  appealEvidence: (id: string) => ["appeal-evidence", id] as const,
 };
 
 // A pre-D's decision bundle never changes unless someone forces a
@@ -444,6 +445,52 @@ export function useAppeals() {
     queryKey: keys.appeals,
     queryFn: () => get<AppealRow[]>("/appeals"),
     staleTime: 60_000,
+  });
+}
+
+export interface AppealEvidenceItem {
+  kind:
+    | "document"
+    | "clinical_justification"
+    | "clinical_narrative"
+    | "attestation"
+    | "gap";
+  key: string;
+  label: string;
+  present: boolean;
+  /** The clinician's actual wording, for the expander. */
+  detail: string | null;
+  signal_code?: string | null;
+  confidence: number | null;
+  s3_key: string | null;
+  recorded_at: string | null;
+  recorded_by: string | null;
+  author_role?: string | null;
+}
+
+export interface AppealEvidence {
+  appeal_id: string;
+  pred_request_id: string;
+  patient_name: string;
+  status: string;
+  denial_reason: string | null;
+  appeal_probability: number | null;
+  filed_at: string | null;
+  evidence: AppealEvidenceItem[];
+  present_count: number;
+  missing_count: number;
+  /** Has a clinician put their reasoning on the record for this case? */
+  has_clinical_necessity: boolean;
+}
+
+export function useAppealEvidence(appealId?: string) {
+  return useQuery({
+    queryKey: keys.appealEvidence(appealId ?? ""),
+    queryFn: () => get<AppealEvidence>(`/appeals/${appealId}/evidence`),
+    enabled: Boolean(appealId),
+    // Short: the whole point is that a dentist writing a justification
+    // shows up on Kim's screen without a redeploy or a hard refresh.
+    staleTime: 15_000,
   });
 }
 

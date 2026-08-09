@@ -4,9 +4,11 @@ import { Link, useNavigate } from "react-router-dom";
 import type { Appeal } from "../types/dental";
 import {
   useAppeal,
+  useAppealEvidence,
   useAppeals,
   useBillingAnalytics,
   useDenials,
+  type AppealEvidenceItem,
   type AppealRow,
   type DenialRow,
 } from "../hooks/useApi";
@@ -80,6 +82,123 @@ function StatusPill({ status }: { status: string }) {
     >
       {status}
     </span>
+  );
+}
+
+
+/**
+ * The evidence behind one filed appeal — including the dentist's own
+ * clinical necessity wording.
+ *
+ * This is the join that closes the loop: Dr Chinta justifies a
+ * criterion in the clinical workbench, and it appears here, on Kim's
+ * screen, as a checked item she can read before she files. Before
+ * this, the reasoning existed in the database and nobody who needed it
+ * ever saw it.
+ *
+ * A clinician-authored item is visually distinct from a scanned
+ * document on purpose. "Xray Pa" is a file; "Clinical necessity
+ * documented by Dr Sridhar Chinta" is a person putting their name to
+ * something, and a payer reads those differently.
+ */
+function EvidenceChecklist({ appealId }: { appealId: string }) {
+  const { data, isLoading } = useAppealEvidence(appealId);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+
+  if (isLoading) {
+    return (
+      <div className="mt-3 animate-pulse space-y-1.5">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-4 rounded bg-gray-100" />
+        ))}
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  const clinical = (i: AppealEvidenceItem) =>
+    i.kind === "clinical_justification" ||
+    i.kind === "clinical_narrative" ||
+    i.kind === "attestation";
+
+  return (
+    <div className="mt-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[11px] font-bold uppercase tracking-[0.1em] text-gray-500">
+          Evidence on file
+        </p>
+        <span className="text-[11px] text-gray-400">
+          {data.present_count} on file
+          {data.missing_count > 0 ? ` · ${data.missing_count} missing` : ""}
+        </span>
+      </div>
+
+      <ul className="mt-1.5 space-y-1">
+        {data.evidence.map((i) => {
+          const expandable = Boolean(i.detail);
+          const isOpen = open.has(i.key);
+          return (
+            <li key={i.key}>
+              <div
+                className={`flex flex-wrap items-start gap-2 rounded px-1.5 py-1 text-[12px] ${
+                  clinical(i) ? "bg-accord-green-50" : ""
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={i.present ? "text-accord-green-700" : "text-red-500"}
+                >
+                  {i.present ? "✓" : "✗"}
+                </span>
+                <span
+                  className={`min-w-0 flex-1 ${
+                    i.present ? "text-gray-700" : "text-gray-500"
+                  } ${clinical(i) ? "font-medium text-accord-green-900" : ""}`}
+                >
+                  {i.label}
+                  {i.confidence != null && (
+                    <span className="text-gray-400">
+                      {" "}
+                      — {Math.round(i.confidence * 100)}% confidence
+                    </span>
+                  )}
+                </span>
+                {expandable && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpen((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(i.key)) next.delete(i.key);
+                        else next.add(i.key);
+                        return next;
+                      })
+                    }
+                    aria-expanded={isOpen}
+                    className="flex-shrink-0 cursor-pointer text-[11px] font-medium text-accord-green-900 hover:underline"
+                  >
+                    {isOpen ? "Hide" : "Read"}
+                  </button>
+                )}
+              </div>
+              {expandable && isOpen && (
+                <p className="ml-6 mt-1 rounded-lg border-l-2 border-l-accord-green-500 bg-white px-3 py-2 text-[12px] italic leading-relaxed text-gray-700">
+                  {i.detail}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      {!data.has_clinical_necessity && (
+        <p className="mt-2 rounded-lg border-l-4 border-l-amber-400 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900">
+          No clinician has documented medical necessity on this case. An
+          appeal without it is the payer’s own reason for the denial,
+          restated.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -180,6 +299,8 @@ function FiledAppeal({
           {a.notes}
         </p>
       )}
+
+      <EvidenceChecklist appealId={a.appeal_id} />
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button
