@@ -379,10 +379,148 @@ async def submitted_on(
     return [{**r, "submitted_at": _iso(r["submitted_at"])} for r in rows]
 
 
+
+# ─────────────────────────────────────────────────────────────────────
+# needs_clinician — does this case want the dentist before it goes out?
+#
+# ⚠ TWO OF THE FOUR RULES NAME TABLES THAT DID NOT EXIST.
+#   justification_events  -> is clinical_justifications, built in 004
+#                            under a different name. Treated as the
+#                            same thing.
+#   clinical_handoffs     -> did not exist at all. Created in 005; the
+#                            schema is mine, not the spec's.
+#
+# ⚠ CONDITIONS 2 AND 3 READ THE ENGINE'S SIGNALS, NOT downgrade_matrix
+# AND bundling_rules DIRECTLY. Those two joins are exactly what the
+# coverage resolver already ran to raise COVERAGE_DOWNGRADE_APPLIED and
+# COVERAGE_BUNDLING_CONFLICT, and the queue ALREADY loads every
+# bundle's signals to count `blocking` — so this costs nothing, where
+# re-deriving through resolve_coverage() per row is what makes
+# /checkin/today take seven seconds. Verified equivalent on all five
+# scheduled cases: the signal is present exactly when the table join
+# hits (A01 dm=1 br=1, D04 dm=1 br=0, B04 dm=0 br=1, U01/U02 neither).
+# ─────────────────────────────────────────────────────────────────────
+
+# Gaps a dentist can close from the chair.
+#
+# ⚠ WAVE 3 ONLY. The rule says a DOCUMENTS-WAVE signal, and documents
+# is wave 3. The first cut also listed the wave-2 CLINICAL_XRAY_
+# REQUIRED / CLINICAL_NARRATIVE_MISSING, which made all five scheduled
+# cases need the clinician — a filter that selects everything is not a
+# filter. Robert Thompson's cleaning carries CLINICAL_XRAY_REQUIRED
+# and no wave-3 gap at all; he is exactly the case that should fall
+# out. Wave is read off the signal rather than guessed from the name.
+#
+# DOC_MEMBER_ID_MISMATCH is deliberately absent: no clinician can fix
+# an insurance card, and routing it to one is how it sits for a week.
+_CLINICIAN_CAPTURABLE = {
+    "DOC_XRAY_MISSING": "radiograph",
+    "DOC_PERIO_CHART_MISSING": "perio charting",
+    "DOC_NARRATIVE_MISSING": "narrative",
+}
+_DOCUMENTS_WAVE = 3
+
+_DOWNGRADE_SIGNAL = "COVERAGE_DOWNGRADE_APPLIED"
+_BUNDLING_SIGNAL = "COVERAGE_BUNDLING_CONFLICT"
+
+# What the downgraded thing is called out loud, so the pill can read
+# "Crown downgrade" rather than "D6065 downgrade".
+_PROC_WORD = {
+    "D2740": "Crown", "D2750": "Crown", "D6065": "Crown",
+    "D2950": "Buildup", "D6010": "Implant", "D7953": "Graft",
+}
+
+
+def _needs_clinician(
+    signals: list[dict],
+    open_codes: set[str],
+    justified: set[str],
+    handoff: Optional[dict],
+    procedure_codes: list[str],
+) -> tuple[bool, Optional[str], int]:
+    """(needs_clinician, needs_reason, cleared_count).
+
+    needs_reason is built most-specific-first and capped at 40
+    characters, because it renders in a pill. It is never truncated
+    mid-word — a shorter phrase is chosen instead.
+    """
+    present = {s.get("signal_code") for s in signals}
+    by_code = {s.get("signal_code"): s for s in signals}
+
+    # 1 — an unmet documents-wave gap the clinician can close.
+    gaps = list(dict.fromkeys(
+        _CLINICIAN_CAPTURABLE[c]
+        for c in open_codes
+        if c in _CLINICIAN_CAPTURABLE
+        and (by_code.get(c) or {}).get("wave") == _DOCUMENTS_WAVE
+    ))
+
+    # 2 and 3 — a downgrade or a bundling hit nobody has justified.
+    downgrade = _DOWNGRADE_SIGNAL in present and _DOWNGRADE_SIGNAL not in justified
+    bundling = _BUNDLING_SIGNAL in present and _BUNDLING_SIGNAL not in justified
+
+    # 4 — somebody handed this case to the dentist and nobody read it.
+    handed = handoff is not None
+
+    # Everything the dentist has already answered on this case.
+    cleared = len(justified & (present | set(_CLINICIAN_CAPTURABLE)))
+
+    if not (gaps or downgrade or bundling or handed):
+        return False, None, cleared
+
+    # Name the procedure the finding is actually ABOUT, from the
+    # signal's own data — billed_code on a downgrade, primary on a
+    # bundle. Taking the first line instead called A01's crown
+    # downgrade an "Implant downgrade", because D6010 is line 1.
+    def _word_for(code: str, key: str) -> Optional[str]:
+        data = (by_code.get(code) or {}).get("data") or {}
+        cdt = data.get(key) if isinstance(data, dict) else None
+        return _PROC_WORD.get(cdt or "")
+
+    down_word = _word_for(_DOWNGRADE_SIGNAL, "billed_code")
+    bund_word = _word_for(_BUNDLING_SIGNAL, "primary")
+    fallback = next(
+        (_PROC_WORD[c] for c in procedure_codes if c in _PROC_WORD), "Plan"
+    )
+    word = down_word or bund_word or fallback
+
+    # Most specific first: a handoff is a person asking, which beats
+    # anything the engine inferred.
+    candidates: list[str] = []
+    if handed:
+        candidates.append("Handed to you — unread")
+    if downgrade and gaps:
+        candidates.append(
+            f"{down_word or word} downgrade + missing {gaps[0]}"
+        )
+    if bundling and gaps:
+        candidates.append(f"{bund_word or word} bundling risk + {gaps[0]}")
+    if downgrade:
+        candidates.append(f"{down_word or word} downgrade — justify or accept")
+        candidates.append(f"{down_word or word} downgrade unjustified")
+    if bundling:
+        candidates.append(f"{bund_word or word} bundling risk — narrative only")
+        candidates.append(f"{bund_word or word} bundling risk unjustified")
+    if len(gaps) > 1:
+        candidates.append(f"Missing {gaps[0]} + {gaps[1]}")
+    if gaps:
+        candidates.append(f"Missing {gaps[0]}")
+    candidates.append("Clinician review needed")
+
+    # First one that fits the pill. Never a mid-word truncation.
+    reason = next((c for c in candidates if len(c) <= 40), "Clinician review")
+    return True, reason, cleared
+
+
 @router.get("/decisions/queue")
 async def decisions_queue(
     request: Request,
     date_param: str | None = Query(None, alias="date"),
+    # A FILTER, not a second endpoint. Absent, every row comes back
+    # exactly as before — the four new fields are added to each row but
+    # no row is removed, so Kim's call is unchanged in content and
+    # ordering.
+    needs_clinician: bool | None = Query(None),
     claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
     """Pre-Ds scheduled for one day, as a review queue.
@@ -449,18 +587,67 @@ async def decisions_queue(
         tenant, list(order),
     )
     blocking: dict[str, int] = {}
+    signals_by_id: dict[str, list[dict]] = {}
+    open_by_id: dict[str, set[str]] = {}
     for b in bundles:
         signals = _json(b["all_signals"], [])
+        signals_by_id[b["pred_request_id"]] = signals
+        open_by_id[b["pred_request_id"]] = set(_open_condition_codes(signals))
         blocking[b["pred_request_id"]] = sum(
             1 for s in signals
             if isinstance(s, dict) and s.get("mode") == "human_approval"
         )
+
+    # Two more queries for the whole page, not two per row.
+    just_rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT pred_request_id, signal_code FROM clinical_justifications "
+        "WHERE tenant_id = $1 AND pred_request_id = ANY($2::text[])",
+        tenant, list(order),
+    )
+    justified_by_id: dict[str, set[str]] = {}
+    for j in just_rows:
+        justified_by_id.setdefault(j["pred_request_id"], set()).add(
+            j["signal_code"]
+        )
+
+    handoff_rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT DISTINCT ON (pred_request_id) pred_request_id, handoff_id, "
+        "       from_user, message, created_at, to_role "
+        "FROM clinical_handoffs "
+        "WHERE tenant_id = $1 AND pred_request_id = ANY($2::text[]) "
+        "  AND to_role = 'dentist' AND read_at IS NULL "
+        "ORDER BY pred_request_id, created_at DESC",
+        tenant, list(order),
+    )
+    handoff_by_id = {h["pred_request_id"]: h for h in handoff_rows}
+
+    # The lines drive the wording of the pill ("Crown downgrade"), and
+    # one query covers every case on the page.
+    line_rows = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT pred_request_id, cdt_code FROM procedure_lines "
+        "WHERE pred_request_id = ANY($1::text[]) ORDER BY line_no",
+        list(order),
+    )
+    codes_by_id: dict[str, list[str]] = {}
+    for l in line_rows:
+        codes_by_id.setdefault(l["pred_request_id"], []).append(l["cdt_code"])
 
     out: list[dict] = []
     for row in rows:
         rid = row["pred_request_id"]
         conditions = _json(row["open_conditions"], [])
         decision = row["decision"] or "pending"
+        ho = handoff_by_id.get(rid)
+        needs, reason, cleared = _needs_clinician(
+            signals_by_id.get(rid, []),
+            open_by_id.get(rid, set()),
+            justified_by_id.get(rid, set()),
+            ho,
+            codes_by_id.get(rid, []),
+        )
         out.append({
             "id": rid,
             "patient": row["patient_name"],
@@ -483,8 +670,26 @@ async def decisions_queue(
             # as today. Both are returned; the client decides.
             "created_at": _iso(row["created_at"]),
             "submitted_at": _iso(row["submitted_at"]),
+            "needs_clinician": needs,
+            "needs_reason": reason,
+            "handoff": (
+                {
+                    "handoff_id": ho["handoff_id"],
+                    "from_user": ho["from_user"],
+                    "message": ho["message"],
+                    "to_role": ho["to_role"],
+                    "created_at": _iso(ho["created_at"]),
+                }
+                if ho
+                else None
+            ),
+            "cleared_count": cleared,
         })
     out.sort(key=lambda x: order.get(x["id"], 99))
+    # Applied AFTER sorting so a filtered page keeps the morning's
+    # order rather than re-deriving one.
+    if needs_clinician is not None:
+        out = [r for r in out if r["needs_clinician"] is needs_clinician]
     return out
 
 
