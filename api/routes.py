@@ -467,6 +467,11 @@ async def decisions_queue(
             "finding": _queue_finding(conditions, row["decision"]),
             "charges": _f(row["total_case_value"]),
             "payer": _payer_name(row["payer_id"]),
+            # The id as well as the label: POST /decisions/:id/submit
+            # records payer_id, and reverse-mapping a display name back
+            # to an id in the browser is how "Delta Dental PPO" ends up
+            # filed against a payer that does not exist.
+            "payer_id": row["payer_id"],
             "status": decision,
             "open": len(conditions),
             "blocking": blocking.get(rid, 0),
