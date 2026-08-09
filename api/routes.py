@@ -33,6 +33,7 @@ from api.auth import (
     TENANT_CONTACTS,
     assert_tenant_allowed,
     require_claims,
+    require_clinician,
     require_admin,
     require_claims_or_demo,
     require_practice_admin,
@@ -2105,6 +2106,12 @@ async def submit_pred(
             "a clinician attesting that the record supports it",
         )
     signer = claims.get("sub")
+    if claims.get("role") not in ("dentist", "accord_admin"):
+        raise HTTPException(
+            403,
+            "Only a clinician can attest a pre-D. A treatment "
+            "coordinator or biller cannot sign for clinical judgement.",
+        )
     if req.attested_by and req.attested_by != signer:
         raise HTTPException(
             422,
@@ -2973,7 +2980,7 @@ async def save_narrative(
     pred_request_id: str,
     req: NarrativeRequest,
     request: Request,
-    claims=Depends(require_claims),
+    claims=Depends(require_clinician),
 ) -> dict:
     """Save the dentist's narrative. One live version per pre-D."""
     tenant = await _tenant_for(request, pred_request_id)
@@ -3020,7 +3027,7 @@ async def save_justification(
     pred_request_id: str,
     req: JustificationRequest,
     request: Request,
-    claims=Depends(require_claims),
+    claims=Depends(require_clinician),
 ) -> dict:
     """Record why a criterion the engine could not confirm is met.
 
@@ -3087,7 +3094,7 @@ async def create_document_requests(
     pred_request_id: str,
     req: DocumentRequestsRequest,
     request: Request,
-    claims=Depends(require_claims),
+    claims=Depends(require_clinician),
 ) -> dict:
     """Ask whoever holds the records for what is missing.
 

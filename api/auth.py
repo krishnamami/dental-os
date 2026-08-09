@@ -181,6 +181,26 @@ async def require_admin(claims=Depends(get_claims)) -> dict:
     return claims
 
 
+async def require_clinician(claims=Depends(get_claims)) -> dict:
+    """Only a clinician may write to the clinical record.
+
+    ⚠ ADDED AFTER A WALKTHROUGH FOUND A TREATMENT COORDINATOR HAD
+    SIGNED A CLINICAL ATTESTATION. The statement reads "accurate to the
+    best of my clinical judgement"; a coordinator has none to offer and
+    the endpoints accepted it anyway, because they used require_claims
+    — authenticated, not authorised.
+
+    accord_admin is included so support can act on a practice's behalf;
+    that is already an audited, impersonated action.
+    """
+    if claims.get("role") in ("dentist", "accord_admin"):
+        return claims
+    raise HTTPException(
+        403,
+        "Only a clinician can write to the clinical record on this pre-D",
+    )
+
+
 async def require_practice_admin(claims=Depends(get_claims)) -> dict:
     """accord_admin anywhere, or a practice owner INSIDE THEIR OWN TENANT.
 
