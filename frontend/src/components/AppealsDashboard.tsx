@@ -1,10 +1,17 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import type { Appeal } from "../types/dental";
-import { useAppeal } from "../hooks/useApi";
+import {
+  useAppeal,
+  useAppeals,
+  useBillingAnalytics,
+  useDenials,
+  type AppealRow,
+  type DenialRow,
+} from "../hooks/useApi";
 import { useDemoLink } from "../hooks/useDemo";
-import { formatCurrencyShort, scenarioId } from "../utils/format";
+import { formatCurrency, formatCurrencyShort, scenarioId } from "../utils/format";
 import AppealPacket from "./AppealPacket";
 import DeadlineTracker from "./DeadlineTracker";
 
@@ -26,10 +33,209 @@ import DeadlineTracker from "./DeadlineTracker";
  * Gap #3).
  */
 
-const LIVE_APPEALS = [
-  { predRequestId: "PRED-SIM-DA-B04", subtitle: "D7953 bone graft bundling" },
+// Cases whose APPEAL VIABILITY is worth showing even though no denial
+// has been entered against them. /decisions/:id/appeal is the engine's
+// opinion on whether an appeal would succeed; appeal_events is what has
+// actually been filed. Different questions, both worth a card.
+//
+// DA-B01 stays because "not viable — implants are excluded" is the most
+// useful thing this tab can tell a biller about that case: do not spend
+// an afternoon on it.
+const VIABILITY_ONLY = [
   { predRequestId: "PRED-SIM-DA-B01", subtitle: "Implants excluded from plan" },
 ];
+
+function Metric({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-4">
+      <p className="text-[11px] uppercase tracking-wide text-gray-500">
+        {label}
+      </p>
+      <p className="mt-1 text-[20px] font-semibold leading-none text-gray-900">
+        {value}
+      </p>
+      <p className="mt-1.5 text-[11px] text-gray-400">{note}</p>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const tone =
+    status === "overturned"
+      ? "border-accord-green-100 bg-accord-green-50 text-accord-green-900"
+      : status === "upheld"
+        ? "border-red-200 bg-red-50 text-red-700"
+        : "border-amber-200 bg-accord-amber-50 text-accord-amber-900";
+  return (
+    <span
+      className={`flex-shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold capitalize ${tone}`}
+    >
+      {status}
+    </span>
+  );
+}
+
+/** An appeal that has been filed. Real row from appeal_events. */
+function FiledAppeal({
+  a,
+  onView,
+}: {
+  a: AppealRow;
+  onView: () => void;
+}) {
+  const pct = a.appeal_probability ?? null;
+  const overdue = a.days_to_deadline != null && a.days_to_deadline < 0;
+  return (
+    <article className="rounded-xl border border-gray-200 bg-white p-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[14px] font-semibold text-gray-900">
+            {a.patient_name} — {scenarioId(a.pred_request_id)}
+          </h3>
+          <p className="mt-0.5 text-[11.5px] text-gray-500">
+            {a.payer_name} · {a.denial_reason ?? "reason not recorded"} ·{" "}
+            {a.appeal_type} · filed{" "}
+            {new Date(a.filed_at).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })}
+          </p>
+        </div>
+        <StatusPill status={a.status} />
+      </header>
+
+      {pct != null && (
+        <div className="mt-3.5">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] uppercase tracking-wide text-gray-500">
+              Overturn probability
+            </span>
+            <span className="text-[13px] font-semibold text-gray-900">
+              {pct}%
+            </span>
+          </div>
+          <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+            <div
+              style={{ width: `${pct}%` }}
+              className={
+                pct >= 50
+                  ? "h-full bg-accord-green-500"
+                  : pct >= 20
+                    ? "h-full bg-amber-400"
+                    : "h-full bg-red-400"
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      <dl className="mt-3.5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <div>
+          <dt className="text-[10px] uppercase tracking-wide text-gray-500">
+            Denied amount
+          </dt>
+          <dd className="text-[13px] font-medium text-gray-900">
+            {a.denied_amount != null ? formatCurrency(a.denied_amount) : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] uppercase tracking-wide text-gray-500">
+            Deadline
+          </dt>
+          <dd
+            className="text-[13px] font-medium"
+            style={{ color: overdue ? "#b91c1c" : "#111827" }}
+          >
+            {a.days_to_deadline != null
+              ? overdue
+                ? `${Math.abs(a.days_to_deadline)} days overdue`
+                : `${a.days_to_deadline} days left`
+              : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] uppercase tracking-wide text-gray-500">
+            Recovered
+          </dt>
+          {/* null, not $0 — an unresolved appeal has recovered nothing
+              YET, and "$0" reads as "we lost". */}
+          <dd className="text-[13px] font-medium text-gray-900">
+            {a.recovered_amount != null
+              ? formatCurrency(a.recovered_amount)
+              : "not resolved"}
+          </dd>
+        </div>
+      </dl>
+
+      {a.notes && (
+        <p className="mt-3 text-[12.5px] leading-relaxed text-gray-600">
+          {a.notes}
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onView}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50"
+        >
+          View case
+        </button>
+      </div>
+    </article>
+  );
+}
+
+/** A denial nobody has appealed yet. The actionable one. */
+function OpenDenial({ d, onView }: { d: DenialRow; onView: () => void }) {
+  const overdue = d.days_to_deadline != null && d.days_to_deadline < 0;
+  return (
+    <article className="rounded-xl border border-amber-200 bg-white p-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[14px] font-semibold text-gray-900">
+            {d.patient_name} — {scenarioId(d.pred_request_id)}
+          </h3>
+          <p className="mt-0.5 text-[11.5px] text-gray-500">
+            {d.payer_name} · {d.denial_reason ?? "reason not recorded"}
+            {d.denial_reason_code ? ` · ${d.denial_reason_code}` : ""}
+          </p>
+        </div>
+        <span className="flex-shrink-0 rounded-full border border-amber-200 bg-accord-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-accord-amber-900">
+          Not yet appealed
+        </span>
+      </header>
+      <p className="mt-3 text-[12.5px] text-gray-600">
+        {d.denied_amount != null ? formatCurrency(d.denied_amount) : "—"} denied
+        ·{" "}
+        <span style={{ color: overdue ? "#b91c1c" : undefined }}>
+          {d.days_to_deadline != null
+            ? overdue
+              ? `appeal window closed ${Math.abs(d.days_to_deadline)} days ago`
+              : `${d.days_to_deadline} days left to appeal`
+            : "no deadline recorded"}
+        </span>
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onView}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-[12.5px] font-medium text-gray-700 transition hover:bg-gray-50"
+        >
+          View case
+        </button>
+      </div>
+    </article>
+  );
+}
 
 function ViabilityBar({ probability }: { probability: number }) {
   const pct = Math.round(probability * 100);
@@ -205,35 +411,93 @@ export default function AppealsDashboard({
   onToast?: (m: string) => void;
 }) {
   const [packet, setPacket] = useState<Appeal | null>(null);
+  const navigate = useNavigate();
+  const demoLink = useDemoLink();
+  const { data: appealRows } = useAppeals();
+  const { data: denialRows } = useDenials();
+  const { data: an } = useBillingAnalytics();
+
+  const filed: AppealRow[] = Array.isArray(appealRows) ? appealRows : [];
+  const denials: DenialRow[] = Array.isArray(denialRows) ? denialRows : [];
+  const unappealed = denials.filter((d) => !d.appeal_filed);
+
+  // Straight into the billing view of the case, same as the queue does.
+  const view = (id: string) =>
+    navigate(demoLink(`/workbench/${id}`), {
+      state: { from: "/revenue-ops", fromLabel: "Revenue ops" },
+    });
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {[
-          { label: "Active appeals", value: "3", note: "2 live · 1 sample" },
-          { label: "Avg overturn rate", value: "65%", note: "bundling, documented" },
-          {
-            label: "Revenue recoverable",
-            value: formatCurrencyShort(8200),
-            note: "sample",
-          },
-        ].map((m) => (
-          <div
-            key={m.label}
-            className="rounded-xl border border-gray-200 bg-white p-4"
-          >
-            <p className="text-[11px] uppercase tracking-wide text-gray-500">
-              {m.label}
-            </p>
-            <p className="mt-1 text-[20px] font-semibold leading-none text-gray-900">
-              {m.value}
-            </p>
-            <p className="mt-1.5 text-[11px] text-gray-400">{m.note}</p>
-          </div>
-        ))}
+        <Metric
+          label="Appeals filed"
+          value={String(an?.appeals.total ?? filed.length)}
+          note={`${an?.appeals.pending ?? 0} pending · live`}
+        />
+        <Metric
+          label="Overturn rate"
+          value={
+            an?.appeals.overturn_rate != null
+              ? `${Math.round(an.appeals.overturn_rate * 100)}%`
+              : "—"
+          }
+          // A rate over zero resolved appeals is not 0%, it is unknown.
+          // Printing 0% would tell a biller they never win.
+          note={
+            an?.appeals.overturn_rate != null
+              ? `${an.appeals.overturned} of ${an.appeals.overturned + an.appeals.upheld} resolved`
+              : "no appeal resolved yet"
+          }
+        />
+        <Metric
+          label="Recovered"
+          value={formatCurrencyShort(an?.appeals.recovered ?? 0)}
+          note={`${formatCurrencyShort(an?.denials.amount ?? 0)} denied · live`}
+        />
       </div>
 
-      {LIVE_APPEALS.map((a) => (
+      {filed.length > 0 && (
+        <>
+          <h2 className="mt-2 text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500">
+            Filed ({filed.length})
+          </h2>
+          {filed.map((a) => (
+            <FiledAppeal
+              key={a.appeal_id}
+              a={a}
+              onView={() => view(a.pred_request_id)}
+            />
+          ))}
+        </>
+      )}
+
+      {unappealed.length > 0 && (
+        <>
+          <h2 className="mt-2 text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500">
+            Denied, not yet appealed ({unappealed.length})
+          </h2>
+          {unappealed.map((d) => (
+            <OpenDenial
+              key={d.denial_id}
+              d={d}
+              onView={() => view(d.pred_request_id)}
+            />
+          ))}
+        </>
+      )}
+
+      {filed.length === 0 && unappealed.length === 0 && (
+        <p className="rounded-xl border border-gray-200 bg-white px-4 py-6 text-[13px] text-gray-500">
+          No denials recorded for this practice. Denials arrive in
+          denial_events when a payer refuses a submitted pre-D.
+        </p>
+      )}
+
+      <h2 className="mt-2 text-[11px] font-bold uppercase tracking-[0.12em] text-gray-500">
+        Appeal viability — the engine&rsquo;s view
+      </h2>
+      {VIABILITY_ONLY.map((a) => (
         <AppealCard
           key={a.predRequestId}
           predRequestId={a.predRequestId}
@@ -242,36 +506,6 @@ export default function AppealsDashboard({
           onToast={onToast}
         />
       ))}
-
-      {/* Static: nothing tracks appeal SUBMISSION state yet. */}
-      <article className="rounded-xl border border-gray-200 bg-white p-4 opacity-90">
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-[14px] font-semibold text-gray-900">
-              Dorothy Harris — frequency limit
-            </h3>
-            <p className="mt-0.5 text-[11.5px] text-gray-500">
-              delta dental · DA-B03 · submitted 2026-08-01
-            </p>
-          </div>
-          <span className="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-[11px] font-semibold text-gray-600">
-            Submitted — awaiting response
-          </span>
-        </header>
-        <p className="mt-3 text-[12.5px] text-gray-500">
-          Sample row. Appeal submission and outcome tracking are not built —
-          the <code className="font-mono">appeals</code> table exists with no
-          generator behind it (dental-simulator Gap #3).
-        </p>
-        <button
-          type="button"
-          disabled
-          title="Outcome tracking not implemented"
-          className="mt-3 cursor-not-allowed rounded-lg border border-gray-300 px-3 py-1.5 text-[12.5px] font-medium text-gray-400"
-        >
-          Mark outcome
-        </button>
-      </article>
 
       {packet && (
         <AppealPacket

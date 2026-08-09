@@ -8,7 +8,7 @@ import ConditionsManager from "../../../components/ConditionsManager";
 import RevOpsAnalytics from "../../../components/RevOpsAnalytics";
 import SubmissionQueue from "../../../components/SubmissionQueue";
 import Toast, { useToast } from "../../../components/Toast";
-import { api } from "../../../hooks/useApi";
+import { api, useBillingAnalytics } from "../../../hooks/useApi";
 import { useDatePicker } from "../../../hooks/useDatePicker";
 import { useDemoLink } from "../../../hooks/useDemo";
 import { formatCurrencyShort } from "../../../utils/format";
@@ -92,6 +92,7 @@ export default function RevenueOps() {
   const { selectedDate, setSelectedDate, availableDates } = useDatePicker();
   const [filter, setFilter] = useState<"all" | "ready" | "blocked">("all");
   const { toast, flash } = useToast();
+  const { data: an } = useBillingAnalytics();
 
   // Same key SubmissionQueue uses — this is a cache read, not a second
   // request. It exists so the metrics can COUNT the queue instead of
@@ -151,10 +152,13 @@ export default function RevenueOps() {
           active={active === "queue" && filter === "blocked"}
           onClick={() => toggle("blocked")}
         />
+        {/* From /analytics/billing, not a literal. It read "3 · 2 live
+            · 1 sample" while the Appeals tab underneath counted 1 —
+            the header and the list it links to have to agree. */}
         <Metric
           label="Appeals active"
-          value="3"
-          note="2 live · 1 sample"
+          value={String(an?.appeals.pending ?? "—")}
+          note={`${an?.appeals.total ?? 0} filed · live`}
           active={active === "appeals"}
           onClick={() => navigate(demoLink("/revenue-ops/appeals"))}
         />

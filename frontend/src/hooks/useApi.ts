@@ -133,6 +133,10 @@ export const keys = {
   patientSummary: (id: string) => ["patient-summary", id] as const,
   appeal: (id: string) => ["appeal", id] as const,
   portfolio: ["portfolio"] as const,
+  submitted: (date: string) => ["submissions", date] as const,
+  denials: ["denials"] as const,
+  appeals: ["appeals"] as const,
+  billingAnalytics: ["analytics", "billing"] as const,
 };
 
 // A pre-D's decision bundle never changes unless someone forces a
@@ -194,6 +198,130 @@ export function usePortfolio() {
   return useQuery({
     queryKey: keys.portfolio,
     queryFn: () => get<Portfolio>("/portfolio/summary"),
+    staleTime: 60_000,
+  });
+}
+
+// ── Billing tracking (dental-os migrations/003) ────────────────────
+//
+// These four read tables that did not exist a week ago. Everything
+// they return is a RECORDED EVENT — a submission logged, a denial
+// entered, an appeal filed — not a prediction. useAppeal() above is
+// the other thing: the engine's view of whether an appeal WOULD be
+// viable. Both are useful and they are not interchangeable.
+
+export interface SubmissionRow {
+  submission_id: string;
+  pred_request_id: string;
+  patient_name: string;
+  payer_name: string;
+  submitted_at: string;
+  status: string;
+  expected_response_days: number;
+  submission_method: string;
+  submission_ref: string | null;
+}
+
+export interface DenialRow {
+  denial_id: string;
+  pred_request_id: string;
+  patient_name: string;
+  payer_id: string;
+  payer_name: string;
+  denied_at: string;
+  denial_reason: string | null;
+  denial_reason_code: string | null;
+  denied_amount: number | null;
+  appeal_deadline: string | null;
+  appeal_viable: boolean;
+  appeal_probability: number | null;
+  days_to_deadline: number | null;
+  appeal_filed: boolean;
+  notes: string | null;
+}
+
+export interface AppealRow {
+  appeal_id: string;
+  pred_request_id: string;
+  patient_name: string;
+  payer_id: string;
+  payer_name: string;
+  filed_at: string;
+  appeal_type: string;
+  status: string;
+  resolved_at: string | null;
+  /** null while unresolved — NOT zero. */
+  recovered_amount: number | null;
+  denial_reason: string | null;
+  denied_amount: number | null;
+  appeal_probability: number | null;
+  appeal_deadline: string | null;
+  days_to_deadline: number | null;
+  notes: string | null;
+}
+
+export interface BillingAnalytics {
+  submissions: {
+    total: number;
+    pending: number;
+    acknowledged: number;
+    responded: number;
+  };
+  denials: {
+    total: number;
+    amount: number;
+    appeal_viable: number;
+    reasons: Array<{ reason: string | null; count: number; amount: number }>;
+  };
+  appeals: {
+    total: number;
+    overturned: number;
+    upheld: number;
+    pending: number;
+    recovered: number;
+    /** null until at least one appeal has resolved. */
+    overturn_rate: number | null;
+  };
+  cases: {
+    total: number;
+    approved: number;
+    denied: number;
+    pended: number;
+    total_value: number;
+  };
+}
+
+export function useSubmittedOn(date: string) {
+  return useQuery({
+    queryKey: keys.submitted(date),
+    queryFn: () =>
+      get<SubmissionRow[]>(
+        `/decisions/submitted?date=${encodeURIComponent(date)}`,
+      ),
+    staleTime: 30_000,
+  });
+}
+
+export function useDenials() {
+  return useQuery({
+    queryKey: keys.denials,
+    queryFn: () => get<DenialRow[]>("/denials"),
+    staleTime: 60_000,
+  });
+}
+
+export function useAppeals() {
+  return useQuery({
+    queryKey: keys.appeals,
+    queryFn: () => get<AppealRow[]>("/appeals"),
+    staleTime: 60_000,
+  });
+}
+
+export function useBillingAnalytics() {
+  return useQuery({
+    queryKey: keys.billingAnalytics,
+    queryFn: () => get<BillingAnalytics>("/analytics/billing"),
     staleTime: 60_000,
   });
 }

@@ -1,9 +1,15 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown } from "lucide-react";
 
-import { api, useConditions, useDecision } from "../hooks/useApi";
+import {
+  api,
+  useConditions,
+  useDecision,
+  useSubmittedOn,
+  type SubmissionRow,
+} from "../hooks/useApi";
 import { useAuth } from "../context/AuthContext";
 import { useDemo, useDemoLink } from "../hooks/useDemo";
 import ReadinessBadge from "./ReadinessBadge";
@@ -19,19 +25,20 @@ import type { Condition } from "../types/dental";
  * only when it is expanded — five collapsed rows should not fire five
  * requests nobody asked for.
  *
- * ── Submitting is LOCAL ──────────────────────────────────────────────
+ * ── Submitting is RECORDED now, but still not TRANSMITTED ────────────
  *
- * "Submit pre-D" does not submit anything to a payer. X12 278 is not
- * wired, and there is no submission table — so the card moves to
- * "Submitted today" in THIS TAB ONLY and is gone on refresh. The
- * section header says so; a queue that silently forgets what a biller
- * did is worse than one that admits it never recorded it.
+ * "Submit pre-D" posts to /decisions/:id/submit, which writes a row to
+ * submission_events. "Submitted today" is read back from
+ * /decisions/submitted?date= and survives a refresh — it used to be a
+ * useState that forgot everything the moment the tab reloaded.
  *
- * What it does record is feedback: feedback_type "accepted" against
- * the case's blocking signal. The API's FeedbackType is only
- * accepted | overridden | false_positive — there is no "submitted"
- * member — so the note carries the actual action rather than inventing
- * an enum value the server would reject.
+ * It still does not reach a payer. X12 278 and NEA FastAttach are not
+ * connected, and the section footer says so. What changed is that a
+ * practice can now answer "when did we send it and who sent it", which
+ * nothing could answer before.
+ *
+ * The local `justSent` map is optimism only — it moves the card before
+ * the refetch lands. submission_events is the truth.
  */
 interface QueueRow {
   id: string;
@@ -39,6 +46,7 @@ interface QueueRow {
   finding: string;
   charges: number;
   payer: string;
+  payer_id: string;
   status: string;
   open: number;
   blocking: number;
@@ -337,15 +345,21 @@ function ReadyRow({
       minute: "2-digit",
     });
     try {
-      // Demo mode holds no token and the API refuses anonymous writes,
-      // so don't pretend to record one.
+      // POST /decisions/:id/submit now, not the feedback workaround.
+      // Feedback was the only write that existed when this button was
+      // built; it recorded "a human accepted a signal", which is not
+      // the same fact as "this went to Delta Dental on Tuesday". The
+      // real event lands in submission_events and SURVIVES A REFRESH.
       if (!isDemo) {
-        await api.post(`/decisions/${row.id}/feedback`, {
-          decision_id: "pre_d_assessment",
-          signal_code: "PRED_READY_TO_SUBMIT",
-          feedback_type: "accepted",
-          submitted_by: SUBMITTER[role ?? "revenue_ops"] ?? "billing",
-          notes: `Submitted to ${row.payer} by revenue ops`,
+        await api.post(`/decisions/${row.id}/submit`, {
+          pred_request_id: row.id,
+          patient_name: row.patient,
+          payer_id: row.payer_id,
+          payer_name: row.payer,
+          submission_method: "manual",
+          notes: `Submitted from the revenue ops queue by ${
+            SUBMITTER[role ?? "revenue_ops"] ?? "billing"
+          }`,
         });
       }
       onSubmitted(row.id, at);
@@ -407,8 +421,15 @@ export default function SubmissionQueue({
   onToast: (m: string) => void;
 }) {
   const demoLink = useDemoLink();
-  // id -> the time it was submitted, this tab only.
-  const [submitted, setSubmitted] = useState<Record<string, string>>({});
+  const qc = useQueryClient();
+  // Optimistic only: the row that was just pressed, so the card moves
+  // before the refetch lands. The TRUTH is submission_events.
+  const [justSent, setJustSent] = useState<Record<string, string>>({});
+  const { data: sentToday } = useSubmittedOn(date);
+  const submissions: SubmissionRow[] = Array.isArray(sentToday)
+    ? sentToday
+    : [];
+  const sentIds = new Set(submissions.map((s) => s.pred_request_id));
 
   // Same query key the workbench uses, so switching between the two
   // screens on one date is a cache hit rather than a second request.
@@ -420,9 +441,9 @@ export default function SubmissionQueue({
     staleTime: 60_000,
   });
   const rows: QueueRow[] = Array.isArray(data) ? data : [];
-  const sent = rows.filter((r) => submitted[r.id]);
-  const blocked = rows.filter((r) => !r.submission_ready && !submitted[r.id]);
-  const ready = rows.filter((r) => r.submission_ready && !submitted[r.id]);
+  const isSent = (id: string) => sentIds.has(id) || Boolean(justSent[id]);
+  const blocked = rows.filter((r) => !r.submission_ready && !isSent(r.id));
+  const ready = rows.filter((r) => r.submission_ready && !isSent(r.id));
 
   const show = (s: "ready" | "blocked") => filter === "all" || filter === s;
 
@@ -463,9 +484,11 @@ export default function SubmissionQueue({
               <ReadyRow
                 key={r.id}
                 row={r}
-                onSubmitted={(id, at) =>
-                  setSubmitted((p) => ({ ...p, [id]: at }))
-                }
+                onSubmitted={(id, at) => {
+                  setJustSent((p) => ({ ...p, [id]: at }));
+                  // Pull the real row in behind the optimistic one.
+                  void qc.invalidateQueries({ queryKey: ["submissions"] });
+                }}
                 onToast={onToast}
               />
             ))}
@@ -478,34 +501,43 @@ export default function SubmissionQueue({
         </section>
       )}
 
-      {sent.length > 0 && (
-        <section className="overflow-hidden rounded-xl border border-accord-green-100 bg-white">
-          <header className="flex items-center justify-between gap-3 border-b border-accord-green-100 bg-accord-green-50 px-4 py-3">
-            <h2 className="text-[13.5px] font-semibold text-accord-green-900">
-              Submitted today ({sent.length})
+      {submissions.length > 0 && (
+        <section className="overflow-hidden rounded-xl border border-blue-200 bg-white">
+          <header className="flex items-center justify-between gap-3 border-b border-blue-200 bg-blue-50 px-4 py-3">
+            <h2 className="text-[13.5px] font-semibold text-blue-900">
+              Submitted today ({submissions.length})
             </h2>
-            <span className="text-[11px] text-accord-green-700">this tab only</span>
+            <span className="text-[11px] text-blue-700">
+              live · submission_events
+            </span>
           </header>
           <ul className="divide-y divide-gray-100">
-            {sent.map((r) => (
+            {submissions.map((s) => (
               <li
-                key={r.id}
+                key={s.submission_id}
                 className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
               >
                 <div className="min-w-0">
                   <p className="text-[13.5px] font-medium text-gray-900">
-                    {r.patient}
+                    📤 {s.patient_name}{" "}
+                    <span className="font-normal text-gray-500">
+                      — {scenarioId(s.pred_request_id)}
+                    </span>
                   </p>
                   <p className="mt-0.5 text-[11.5px] text-gray-500">
-                    {r.payer} · {scenarioId(r.id)}
+                    Submitted to {s.payer_name} · expected response:{" "}
+                    {s.expected_response_days} business days
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-2">
-                  <span className="text-[12px] font-medium text-accord-green-700">
-                    Submitted ✓ {submitted[r.id]}
+                  <span className="text-[12px] font-medium text-blue-700">
+                    {new Date(s.submitted_at).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
                   </span>
                   <Link
-                    to={demoLink(`/workbench/${r.id}`)}
+                    to={demoLink(`/workbench/${s.pred_request_id}`)}
                     className="rounded-lg border border-gray-300 px-2.5 py-1 text-[12px] font-medium text-gray-700 hover:bg-gray-50"
                   >
                     View
@@ -515,8 +547,8 @@ export default function SubmissionQueue({
             ))}
           </ul>
           <p className="border-t border-gray-100 px-4 py-2.5 text-[11px] text-gray-400">
-            Nothing was sent to a payer. X12 278 is not wired and there is no
-            submission table, so this list is gone on refresh.
+            Recorded in submission_events and survives a refresh. Nothing was
+            transmitted to the payer — X12 278 is not connected.
           </p>
         </section>
       )}
