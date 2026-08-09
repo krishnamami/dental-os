@@ -3140,3 +3140,230 @@ async def create_document_requests(
             f"channel to them yet."
         ),
     }
+
+
+@router.get("/appeals/{appeal_id}/evidence")
+async def appeal_evidence(
+    appeal_id: str,
+    request: Request,
+    claims=Depends(require_claims_or_demo),
+) -> dict:
+    """The evidence checklist behind one appeal — including the
+    dentist's own words.
+
+    ⚠ THIS ENDPOINT DID NOT EXIST. The criterion names
+    GET /api/appeals/:id/evidence as though it were there to be
+    extended; there was no /appeals/{id}/... route at all. Built here.
+    Also: `justification_events` is `clinical_justifications`, created
+    in migration 004 under a different name.
+    Also: dentist-workbench-build-prompt.md is in none of the three
+    repos, so this is built from the criterion as written in the
+    prompt.
+    """
+    tenant = tenant_filter(claims) or DEFAULT_TENANT
+    sim, os_pool = _pools(request)
+
+    appeals = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT a.appeal_id, a.pred_request_id, a.patient_name, a.payer_id,
+               a.filed_at, a.status, a.appeal_type,
+               d.denial_reason, d.denied_amount, d.appeal_probability,
+               d.appeal_deadline
+        FROM appeal_events a
+        LEFT JOIN denial_events d
+               ON d.denial_id = a.denial_id AND d.tenant_id = a.tenant_id
+        WHERE a.tenant_id = $1 AND a.appeal_id = $2
+        """,
+        tenant, appeal_id,
+    )
+    if not appeals:
+        # 404, not 403, for the same reason assert_tenant_allowed does:
+        # confirming an id exists under another practice turns this into
+        # an oracle.
+        raise HTTPException(404, "Not found")
+    a = appeals[0]
+    pred_request_id = a["pred_request_id"]
+
+    # ── What the chart holds ────────────────────────────────────────
+    docs = await fetch_with_tenant(
+        sim, tenant,
+        "SELECT document_type, document_category, confidence_score, "
+        "       s3_key, received_at FROM clinical_evidence "
+        "WHERE pred_request_id = $1 ORDER BY document_type",
+        pred_request_id,
+    )
+
+    items: list[dict] = [
+        {
+            "kind": "document",
+            "key": f"doc:{d['document_type']}",
+            "label": d["document_type"].replace("_", " ").title(),
+            "present": True,
+            "detail": None,
+            "confidence": _f(d["confidence_score"]),
+            "s3_key": d["s3_key"],
+            "recorded_at": _iso(d["received_at"]),
+            "recorded_by": None,
+        }
+        for d in docs
+        # A pre-D letter is the denial being appealed, not evidence for
+        # it. Listing it as supporting evidence pads the checklist with
+        # the very thing under dispute.
+        if not d["document_type"].startswith("PRED_LETTER")
+    ]
+
+    # ── What the DENTIST wrote ──────────────────────────────────────
+    #
+    # This is the join the criterion is about. Keyed on
+    # pred_request_id, because a justification is written against the
+    # DECISION and an appeal is filed against the same decision — there
+    # is no appeal_id on a justification and there should not be: the
+    # clinical reasoning predates the appeal and survives it being
+    # withdrawn and refiled.
+    justifications = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT j.justification_id, j.signal_code, j.justification,
+               j.justified_by, j.updated_at,
+               u.name AS author_name, u.role AS author_role
+        FROM clinical_justifications j
+        LEFT JOIN users u ON u.user_id = j.justified_by
+        WHERE j.tenant_id = $1 AND j.pred_request_id = $2
+        ORDER BY j.updated_at
+        """,
+        tenant, pred_request_id,
+    )
+    for j in justifications:
+        who = j["author_name"] or "a clinician"
+        when = j["updated_at"]
+        stamp = (
+            f"{when.day} {when.strftime('%b')}" if when else ""
+        )
+        items.append({
+            "kind": "clinical_justification",
+            "key": f"justification:{j['signal_code']}",
+            "label": (
+                f"Clinical necessity documented by {who}"
+                + (f", {stamp}" if stamp else "")
+            ),
+            "present": True,
+            # The dentist's actual wording, for the expander.
+            "detail": j["justification"],
+            "signal_code": j["signal_code"],
+            "confidence": None,
+            "s3_key": None,
+            "recorded_at": _iso(when),
+            "recorded_by": who,
+            "author_role": j["author_role"],
+        })
+
+    # ── And the narrative, which is the same kind of thing ──────────
+    narratives = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT n.narrative_text, n.updated_at, n.source,
+               u.name AS author_name
+        FROM clinical_narratives n
+        LEFT JOIN users u ON u.user_id = n.written_by
+        WHERE n.tenant_id = $1 AND n.pred_request_id = $2
+        """,
+        tenant, pred_request_id,
+    )
+    for nrow in narratives:
+        who = nrow["author_name"] or "a clinician"
+        when = nrow["updated_at"]
+        stamp = f"{when.day} {when.strftime('%b')}" if when else ""
+        items.append({
+            "kind": "clinical_narrative",
+            "key": "narrative",
+            "label": (
+                f"Clinical narrative written by {who}"
+                + (f", {stamp}" if stamp else "")
+            ),
+            "present": True,
+            "detail": nrow["narrative_text"],
+            "confidence": None,
+            "s3_key": None,
+            "recorded_at": _iso(when),
+            "recorded_by": who,
+        })
+
+    # ── And the attestation ─────────────────────────────────────────
+    attestations = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT c.attested_at, c.statement, u.name AS author_name
+        FROM clinical_attestations c
+        LEFT JOIN users u ON u.user_id = c.attested_by
+        WHERE c.tenant_id = $1 AND c.pred_request_id = $2
+        ORDER BY c.attested_at DESC LIMIT 1
+        """,
+        tenant, pred_request_id,
+    )
+    for at in attestations:
+        who = at["author_name"] or "a clinician"
+        when = at["attested_at"]
+        stamp = f"{when.day} {when.strftime('%b')}" if when else ""
+        items.append({
+            "kind": "attestation",
+            "key": "attestation",
+            "label": f"Attested by {who}" + (f", {stamp}" if stamp else ""),
+            "present": True,
+            "detail": at["statement"],
+            "confidence": None,
+            "s3_key": None,
+            "recorded_at": _iso(when),
+            "recorded_by": who,
+        })
+
+    # ── What is still missing ───────────────────────────────────────
+    #
+    # From the engine's own appeal resolver rather than a second
+    # opinion, so this checklist and the viability card agree.
+    missing: list[str] = []
+    try:
+        context = await _build_context(request, pred_request_id)
+        # Same signature as the /appeal endpoint uses at line ~962.
+        # Called with one argument this raised and the except swallowed
+        # it, so the checklist silently reported zero gaps.
+        appeal = resolve_appeal_viability(context, context.catalogue_rules)
+        missing = list(appeal.get("missing_evidence") or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("appeal evidence: viability failed for %s: %s",
+                       pred_request_id, exc)
+
+    items.extend(
+        {
+            "kind": "gap",
+            "key": f"gap:{m}",
+            "label": m,
+            "present": False,
+            "detail": None,
+            "confidence": None,
+            "s3_key": None,
+            "recorded_at": None,
+            "recorded_by": None,
+        }
+        for m in missing
+    )
+
+    present = [i for i in items if i["present"]]
+    return {
+        "appeal_id": appeal_id,
+        "pred_request_id": pred_request_id,
+        "patient_name": a["patient_name"],
+        "status": a["status"],
+        "denial_reason": a["denial_reason"],
+        "appeal_probability": a["appeal_probability"],
+        "filed_at": _iso(a["filed_at"]),
+        "evidence": items,
+        "present_count": len(present),
+        "missing_count": len(items) - len(present),
+        # The one the checklist exists to answer: has a clinician put
+        # their reasoning on the record for this case?
+        "has_clinical_necessity": any(
+            i["kind"] in ("clinical_justification", "clinical_narrative")
+            for i in items
+        ),
+    }
