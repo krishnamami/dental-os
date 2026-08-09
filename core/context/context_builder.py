@@ -7,6 +7,9 @@ view of the world. Everything a persona reasons over must come from the
 context object — that is the contract that makes a decision replayable
 from persona_bundles later.
 
+import logging
+
+logger = logging.getLogger(__name__)
 Reads CONTEXT VIEWS, not raw tables (CONTEXT.md RULE 4). Every query
 goes through fetch_with_tenant, so RLS tenant context is never missing
 and the transaction is read-only.
@@ -69,8 +72,14 @@ def _json(value: Any, default: Any) -> Any:
 class ContextBuilder:
     """Builds one PredContext per pre-D, per request."""
 
-    def __init__(self, pool: asyncpg.Pool):
+    def __init__(self, pool: asyncpg.Pool, os_pool: asyncpg.Pool | None = None):
         self.pool = pool
+        # OPTIONAL, and every existing caller omits it. Without it the
+        # context carries no denial_event and the appeal persona stays
+        # silent — which is the correct answer for a pre-D nobody has
+        # submitted, and the safe answer for a caller that has not been
+        # taught about the second database yet.
+        self.os_pool = os_pool
 
     async def build(
         self,
@@ -236,6 +245,36 @@ class ContextBuilder:
                 policy_citation=appeal.get("policy_citation"),
             )
 
+        # A REAL denial, from dental_os. Loaded here rather than in the
+        # persona because a persona is sync and DB-less (RULE 5), and
+        # the two databases cannot be joined — they are separate
+        # databases on one instance with no fdw.
+        denial_event = None
+        if self.os_pool is not None:
+            try:
+                async with self.os_pool.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute(
+                            "SELECT set_config('app.tenant_id', $1, true)",
+                            tenant_id,
+                        )
+                        row = await conn.fetchrow(
+                            "SELECT denial_id, denied_at, denial_reason, "
+                            "       denial_reason_code, denied_amount, "
+                            "       appeal_deadline, appeal_viable, "
+                            "       appeal_probability, submission_id "
+                            "FROM denial_events "
+                            "WHERE tenant_id = $1 AND pred_request_id = $2 "
+                            "ORDER BY denied_at DESC LIMIT 1",
+                            tenant_id, pred_request_id,
+                        )
+                denial_event = dict(row) if row else None
+            except Exception as exc:  # noqa: BLE001
+                # A missing denial must not fail the whole context. It
+                # reads as "no denial", which is what it is.
+                logger.warning("denial_events read failed for %s: %s",
+                               pred_request_id, exc)
+
         graph = await self._one(
             tenant_id,
             """
@@ -297,6 +336,7 @@ class ContextBuilder:
             procedures=procedures,
             clinical_evidence=evidence,
             payer_response=payer_response,
+            denial_event=denial_event,
             confirms_count=int(graph.get("confirms") or 0),
             contradicts_count=int(graph.get("contradicts") or 0),
             contradicts_fields=list(graph.get("contradicts_fields") or []),

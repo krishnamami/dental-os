@@ -567,10 +567,42 @@ class TestDocumentationReviewer:
 # ═════════════════════════════════════════════════════════════════════
 
 
+# A denial_events row, as ContextBuilder loads it. Its presence is the
+# gate; the resolver still reads dates and codes off payer_response.
+DENIED_EVENT = {
+    "denial_id": "test-denial",
+    "denied_at": "2026-07-31",
+    "denial_reason": "bundling",
+    "denial_reason_code": "D.7.4-BUNDLE",
+    "denied_amount": 1230.00,
+    "appeal_deadline": "2026-09-29",
+    "appeal_viable": True,
+}
+
+
 class TestAppealSpecialist:
-    def test_da_a01_pended_bundling_is_viable(self, rules):
+    def test_pended_with_no_denial_emits_nothing(self, rules):
+        """The DA-A01 defect: pended is a PREDICTION, not a refusal.
+
+        payer_responses says "pended" on 20 of the 40 cases and none of
+        them has been sent anywhere. Appealing something no payer has
+        refused is not a thing, and this used to emit APPEAL_VIABLE and
+        APPEAL_PACKET_READY on exactly that.
+        """
         c = ctx_with_rules(
             rules, decision="pended",
+            procedures=[proc("D6010"), proc("D7953")],
+            open_conditions=["COVERAGE_BUNDLING_CONFLICT"],
+            clinical_evidence=[ev("XRAY_PA", {"bone_loss_mm": 4.2}),
+                               ev("CLINICAL_NOTE", {"narrative_present": True})],
+            payer_response=PayerResponse(decision="pended",
+                                         appeal_deadline="2026-10-04",
+                                         pend_checklist=["COVERAGE_BUNDLING_CONFLICT"]))
+        assert AppealSpecialist().run(c) == []
+
+    def test_bundling_is_viable_once_really_denied(self, rules):
+        c = ctx_with_rules(
+            rules, decision="pended", denial_event=DENIED_EVENT,
             procedures=[proc("D6010"), proc("D7953")],
             open_conditions=["COVERAGE_BUNDLING_CONFLICT"],
             clinical_evidence=[ev("XRAY_PA", {"bone_loss_mm": 4.2}),
@@ -586,7 +618,7 @@ class TestAppealSpecialist:
 
     def test_da_b01_not_viable(self, rules):
         c = ctx_with_rules(
-            rules, decision="denied", scenario_id="DA-B01",
+            rules, decision="denied", denial_event=DENIED_EVENT, scenario_id="DA-B01",
             procedures=[proc("D6010")],
             payer_response=PayerResponse(decision="denied",
                                          denial_reason_code="D.1.2",
@@ -598,7 +630,7 @@ class TestAppealSpecialist:
 
     def test_da_b05_waiting_period_not_viable(self, rules):
         c = ctx_with_rules(
-            rules, decision="denied", scenario_id="DA-B05",
+            rules, decision="denied", denial_event=DENIED_EVENT, scenario_id="DA-B05",
             procedures=[proc("D2750")],
             payer_response=PayerResponse(decision="denied",
                                          denial_reason_code="D.2.1",
@@ -613,7 +645,8 @@ class TestAppealSpecialist:
 
     def test_deadline_passed_short_circuits(self, rules):
         c = ctx_with_rules(
-            rules, decision="denied", procedures=[proc("D2750")],
+            rules, decision="denied", denial_event=DENIED_EVENT,
+            procedures=[proc("D2750")],
             payer_response=PayerResponse(decision="denied",
                                          denial_reason_code="D.4.1",
                                          appeal_deadline="2020-01-01"))

@@ -349,6 +349,52 @@ this side destroys that property. The connection string in `.env.example` uses
 
 ---
 
+## RULE 16 — `payer_responses` IS A FIXTURE, NOT A RECORD OF EVENTS
+
+`payer_responses` (dental-simulator, 40 rows) describes **the posture a payer
+is predicted to take** on a pre-D. Every pre-D has a row. None of them records
+anything that happened.
+
+What happened lives in dental-os, and only there:
+
+| Fact | Table | Rows today |
+|---|---|---|
+| we sent it | `submission_events` | 3 |
+| they refused it | `denial_events` | 3 |
+| we appealed | `appeal_events` | 3 |
+
+**The rule:** anything user-facing that asserts an event — a submission, a
+denial, an appeal, a date one of those produced — reads the dental-os tables.
+`payer_responses` is for the engine's prediction and nothing else.
+
+This is why `appeal_specialist` gates on `context.denial_event` and not on
+`context.decision`. Gating on the prediction fired APPEAL_VIABLE on twenty
+pre-Ds nobody had sent anywhere.
+
+`received_at` was the one column claiming otherwise — `2026-08-05` on all 40
+rows, asserting a payer answered forty cases in a day. It is dropped from
+`vw_appeal_context` and NULLed in the data.
+
+⚠ **The column itself still exists**, and deliberately: dental-simulator's
+`infra/migrations/001_entity_model.sql` declares it and
+`scripts/generate_payer_responses.py` INSERTs it by name. Dropping it from here
+would break the simulator's own corpus regeneration on the next run, and RULE
+15 forbids editing that repo. The dental-simulator change, when someone owns
+it: remove `received_at` from both files, then `ALTER TABLE payer_responses
+DROP COLUMN received_at`.
+
+### No FK can cross this boundary
+
+`payer_responses` is in database `dental`; the event tables are in `dental_os`.
+Same RDS instance, two databases, `plpgsql` only — no `postgres_fdw`, no
+`dblink`. A foreign key cannot cross a database in Postgres. The enforceable
+chain lives inside dental-os and is built in `migrations/009`:
+
+    submission_events <- denial_events.submission_id
+                      <- appeal_events.denial_id
+
+---
+
 ## Confidence Threshold Reference
 
 There is no single `CONFIDENCE_FLOOR` in dental-simulator. There are two, and

@@ -1,8 +1,10 @@
 """
 T-28 — Appeal specialist. Wave 5, human_approval, billing.
 
-Runs only on denied or pended (decisions.yaml). Returns [] for an
-approved case rather than a signal saying nothing happened.
+Runs only on a pre-D a payer has actually DENIED — a denial_events row
+in dental_os, not payer_responses.decision, which is a simulator
+fixture every pre-D carries. Returns [] otherwise, rather than a signal
+saying nothing happened.
 
 TELLING SOMEONE NOT TO APPEAL IS THE VALUABLE HALF.
 
@@ -28,6 +30,20 @@ class AppealSpecialist(DentalPersona):
     owner_team = "billing"
 
     def _compute_offline(self, context: Any) -> list[dict]:
+        # ⚠ GATED ON A REAL DENIAL, NOT ON A PREDICTION.
+        #
+        # This used to read context.decision, which comes from
+        # dental-simulator's payer_responses — a fixture describing the
+        # posture a payer is EXPECTED to take. Every pre-D has one, and
+        # 20 of them say "pended", so the appeal persona fired on cases
+        # that had never been submitted to anybody. James Mitchell
+        # carried APPEAL_VIABLE and APPEAL_PACKET_READY having never
+        # been sent, let alone refused.
+        #
+        # denial_event is a denial_events row: a payer refused this,
+        # after a submission that went out. No row, no appeal.
+        if getattr(context, "denial_event", None) is None:
+            return []
         if getattr(context, "decision", None) not in ("denied", "pended"):
             return []
 

@@ -214,7 +214,10 @@ class PersonaRunner:
         # needs, since it builds the runner once at startup and cannot
         # know which tenant the next request is for.
         self.tenant_id = tenant_id
-        self.builder = ContextBuilder(simulator_pool)
+        # BOTH pools. The builder reads the simulator for everything
+        # the engine reasons about, and dental_os for the one fact that
+        # lives there: whether a payer really refused this pre-D.
+        self.builder = ContextBuilder(simulator_pool, os_pool)
         self.enricher = ContextEnricher(simulator_pool)
         # Portfolio aggregate cache, KEYED BY TENANT. vw_portfolio_context
         # is tenant-scoped, so a single cached dict would have served

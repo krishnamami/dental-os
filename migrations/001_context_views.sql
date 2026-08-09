@@ -477,6 +477,9 @@ LEFT JOIN pred_states ps ON ps.pred_request_id = pr.pred_request_id;
 -- not filter — appeal_specialist's own boundary decides whether to run
 -- — but is_appealable_decision is precomputed so the caller does not
 -- reimplement that test.
+-- DROP first: CREATE OR REPLACE cannot remove a column from a view,
+-- and received_at was removed from this one.
+DROP VIEW IF EXISTS vw_appeal_context;
 CREATE OR REPLACE VIEW vw_appeal_context
 WITH (security_invoker = true) AS
 SELECT
@@ -500,7 +503,17 @@ SELECT
     presp.valid_to,
     presp.pend_checklist,
     presp.response_date,
-    presp.received_at                            AS response_received_at,
+    -- ⚠ received_at IS DELIBERATELY NOT SELECTED.
+    --
+    -- payer_responses is dental-simulator FIXTURE data: the posture a
+    -- payer is predicted to take on a pre-D. All 40 rows carried
+    -- received_at = 2026-08-05, which asserted that a payer had
+    -- responded to forty cases on one day, none of which had been
+    -- sent. It was the only column in the table claiming an event
+    -- happened, and nothing downstream read it.
+    --
+    -- What actually happened lives in dental_os: submission_events,
+    -- denial_events, appeal_events. See migrations/009.
 
     (presp.decision IN ('denied', 'pended'))     AS is_appealable_decision,
     (presp.appeal_deadline - CURRENT_DATE)       AS days_to_appeal_deadline,

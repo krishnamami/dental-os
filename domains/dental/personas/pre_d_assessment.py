@@ -163,8 +163,12 @@ class PreDAssessment(DentalPersona):
                 )
             return [self.make_signal(
                 "PRED_CONDITIONS_OPEN",
-                f"Not ready to submit: {'; '.join(reasons)}. The payer "
-                f"decision on record is '{context.decision}'.",
+                # "The payer decision on record is 'pended'" claimed a
+                # payer had ruled on a pre-D that has not been sent.
+                # context.decision is payer_responses — the simulator's
+                # PREDICTION of how this payer will rule. Say that.
+                f"Not ready to submit: {'; '.join(reasons)}. Predicted "
+                f"payer outcome if sent as-is: '{context.decision}'.",
                 mode="human_approval",
                 data={
                     **base_data,

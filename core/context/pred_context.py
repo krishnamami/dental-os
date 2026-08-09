@@ -178,6 +178,17 @@ class PredContext:
     procedures: list[ProcedureLine] = field(default_factory=list)
     clinical_evidence: list[ClinicalEvidence] = field(default_factory=list)
     payer_response: Optional[PayerResponse] = None
+    # ⚠ TWO DIFFERENT THINGS, DELIBERATELY BOTH HERE.
+    #
+    # payer_response is dental-simulator's FIXTURE: the posture a payer
+    # is predicted to take. Every pre-D has one, and none of them
+    # records anything that happened.
+    #
+    # denial_event is dental_os's denial_events row — a payer actually
+    # refused this, after a submission that actually went out. It is
+    # None for all but a handful of cases, and that is the point: an
+    # appeal is only real when this is not None.
+    denial_event: Optional[dict] = None
 
     # Date of birth, for the age limits on cdt_codes (D6010 and D6065
     # carry an 18-year floor). None means the age check does not run —
