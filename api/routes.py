@@ -1704,6 +1704,19 @@ async def checkin_today(
     )
     checked_at = {r["pred_request_id"]: r["checked_in_at"] for r in checked}
 
+    # Whether the coordinator has finished with each patient. This used
+    # to be a Set in the browser, so a refresh of /coverage put everyone
+    # she had already seen back under "ready for consultation" and let
+    # her hand the same case over twice.
+    done_rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT pred_request_id, created_at FROM clinical_handoffs "
+        "WHERE tenant_id = $1 AND kind = 'consultation_complete' "
+        "  AND pred_request_id = ANY($2::text[])",
+        tenant, list(schedule),
+    )
+    consult_done = {r["pred_request_id"]: r["created_at"] for r in done_rows}
+
     out: list[dict] = []
     for row in rows:
         rid = row["pred_request_id"]
@@ -1807,9 +1820,14 @@ async def checkin_today(
 
         at = checked_at.get(rid)
         status = "checked_in" if at else ("heads_up" if alerts else "clear")
+        done_at = consult_done.get(rid)
 
         out.append({
             "pred_request_id": rid,
+            # Server-side, so it survives a refresh. The coverage screen
+            # buckets on this rather than on its own local Set.
+            "consultation_complete": done_at is not None,
+            "consultation_completed_at": _iso(done_at),
             "patient_name": row["patient_name"],
             "patient_email": row["patient_email"],
             "patient_phone": row["patient_phone"],
@@ -3375,10 +3393,17 @@ async def save_justification(
 # will ever filter for.
 HANDOFF_ROLES = ("dentist", "front_desk", "tx_coord", "revenue_ops")
 
+# What the note MEANS. 'note' is somebody asking for attention;
+# 'consultation_complete' is the coordinator saying she has finished
+# with the patient, which the coverage screen reads back as state.
+# Distinct kinds coexist on one pre-D; repeats of one kind collapse.
+HANDOFF_KINDS = ("note", "consultation_complete")
+
 
 class HandoffRequest(BaseModel):
     to_role: str = "dentist"
     note: str
+    kind: str = "note"
 
 
 @router.post("/decisions/{pred_request_id}/handoff")
@@ -3407,17 +3432,35 @@ async def create_handoff(
             422,
             f"to_role must be one of {', '.join(HANDOFF_ROLES)}",
         )
+    if req.kind not in HANDOFF_KINDS:
+        raise HTTPException(
+            422,
+            f"kind must be one of {', '.join(HANDOFF_KINDS)}",
+        )
 
     _, os_pool = _pools(request)
     rows = await execute_os_with_tenant(
         os_pool, tenant,
+        # IDEMPOTENT PER KIND. Two clicks of [Mark consultation
+        # complete] used to queue two notes with nothing to tell them
+        # apart. The repeat now refreshes the note in place and re-opens
+        # it — somebody asking a second time is asking again, not
+        # asking about a second thing.
         """
         INSERT INTO clinical_handoffs
-            (tenant_id, pred_request_id, to_role, from_user, message)
-        VALUES ($1,$2,$3,$4,$5)
-        RETURNING handoff_id, created_at
+            (tenant_id, pred_request_id, to_role, from_user, message, kind)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (tenant_id, pred_request_id, to_role, kind) DO UPDATE
+            SET message = EXCLUDED.message,
+                from_user = EXCLUDED.from_user,
+                created_at = NOW(),
+                read_at = NULL,
+                read_by = NULL
+        RETURNING handoff_id, created_at,
+                  (xmax <> 0) AS was_existing
         """,
         tenant, pred_request_id, req.to_role, claims.get("sub"), note,
+        req.kind,
     )
     row = rows[0]
     return {
@@ -3425,6 +3468,10 @@ async def create_handoff(
         "handoff_id": row["handoff_id"],
         "pred_request_id": pred_request_id,
         "to_role": req.to_role,
+        "kind": req.kind,
+        # True when this replaced an existing note rather than adding
+        # one. The caller does not need it; a human reading the log does.
+        "replaced_existing": row["was_existing"],
         "created_at": _iso(row["created_at"]),
     }
 
