@@ -30,8 +30,10 @@ import { useAuth } from "./context/AuthContext";
  */
 const LandingPage = lazy(() => import("./pages/lp/LandingPage"));
 const Login = lazy(() => import("./pages/Login"));
-const WorkbenchPipeline = lazy(
-  () => import("./pages/app/workbench/WorkbenchPipeline"),
+// /workbench splits by role — see WorkbenchRoute. It lazies the two
+// views itself, so only the one a given role opens is downloaded.
+const WorkbenchRoute = lazy(
+  () => import("./pages/app/workbench/WorkbenchRoute"),
 );
 const WorkbenchDetail = lazy(
   () => import("./pages/app/workbench/WorkbenchDetail"),
@@ -75,7 +77,12 @@ const NotFound = lazy(() => import("./pages/NotFound"));
  * the landing page ever has to answer for its own byte budget.
  */
 if (typeof window !== "undefined") {
-  import("./pages/app/workbench/WorkbenchPipeline").catch(() => {});
+  // The route shell, then the engine view it will pick: ?demo=true is
+  // pinned to the engine view (see WorkbenchRoute), and that is the
+  // only /workbench the landing page ever opens. Prefetching the shell
+  // alone would still leave a round trip in front of the demo.
+  import("./pages/app/workbench/WorkbenchRoute").catch(() => {});
+  import("./pages/app/workbench/WorkbenchEngineView").catch(() => {});
 }
 
 /** C-02 — send a signed-in user to the page their role starts on. */
@@ -123,7 +130,7 @@ export default function App() {
             <Route path="/app" element={<RoleHome />} />
 
             <Route element={<ProductRoute product="workbench" />}>
-              <Route path="/workbench" element={<WorkbenchPipeline />} />
+              <Route path="/workbench" element={<WorkbenchRoute />} />
               <Route path="/workbench/:id" element={<WorkbenchDetail />} />
             </Route>
 

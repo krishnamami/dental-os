@@ -9,7 +9,12 @@ import { api } from "../../../hooks/useApi";
 import { formatCurrencyShort } from "../../../utils/format";
 
 /**
- * D-10 — the workbench as a split panel.
+ * D-10 — the workbench as a split panel. THE ENGINE VIEW.
+ *
+ * Renamed from WorkbenchPipeline when /workbench split by role; the
+ * body below is untouched. This is what revenue ops and the Accord
+ * admin see. The dentist gets WorkbenchClinicalView — see
+ * WorkbenchRoute.
  *
  * Left: the day's queue. Right: everything about the selected pre-D.
  * `selectedId` is the only state that matters — it drives all three
@@ -124,7 +129,7 @@ function CountCell({
   );
 }
 
-export default function WorkbenchPipeline() {
+export default function WorkbenchEngineView() {
   const [clickedId, setClickedId] = useState<string | null>(null);
   // Below md the two panels share the screen one at a time.
   const [showDetail, setShowDetail] = useState(false);

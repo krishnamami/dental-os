@@ -36,7 +36,7 @@ import {
 /**
  * D-03 — one pre-D, all nine personas, in the detail layout.
  *
- * ONE component, two homes: the right half of WorkbenchPipeline and
+ * ONE component, two homes: the right half of WorkbenchEngineView and
  * the standalone /workbench/:id page. They show the same thing, and a
  * second copy would let them disagree about the same case — which is
  * the failure this whole layer exists to prevent.
