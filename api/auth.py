@@ -220,6 +220,33 @@ require_clinician_cap = _capability(
     "Only a clinician can write to the clinical record on this pre-D",
 )
 
+# Judging the ENGINE: accepting a signal, overriding it, calling it a
+# false positive. provider_feedback is what the audit trail is built on
+# and what retrains the rules, so "who is allowed to say the engine was
+# wrong" is a real question and the answer is not "anyone signed in".
+#
+# revenue_ops and dentist only. The front desk and the coordinator work
+# the queue but do not adjudicate payer policy, and dso_owner reads the
+# portfolio rather than individual findings.
+require_engine_feedback = _capability(
+    "require_engine_feedback",
+    ("revenue_ops", "dentist"),
+    "This role cannot record a verdict on an engine finding",
+)
+
+# Handing a case to someone else. Everyone, deliberately — the front
+# desk flags a patient to the clinician, the coordinator hands over
+# after the consultation, billing chases a narrative. Enumerated rather
+# than left as bare authentication so that a NEW role has to be added
+# here on purpose; the failure mode of the alternative is a role nobody
+# considered quietly gaining the ability to put work in the dentist's
+# queue.
+require_handoff_sender = _capability(
+    "require_handoff_sender",
+    ("front_desk", "tx_coord", "revenue_ops", "dentist", "dso_owner"),
+    "This role cannot hand a case to another",
+)
+
 # Acting on a payer relationship: filing an appeal. Billing's job.
 require_billing = _capability(
     "require_billing",

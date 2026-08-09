@@ -37,6 +37,8 @@ from api.auth import (
     require_clinician,
     require_clinician_cap,
     require_document_chase,
+    require_engine_feedback,
+    require_handoff_sender,
     require_patient_contact,
     require_admin,
     require_claims_or_demo,
@@ -634,12 +636,25 @@ async def decisions_queue(
     handoff_rows = await execute_os_with_tenant(
         os_pool, tenant,
         "SELECT DISTINCT ON (pred_request_id) pred_request_id, handoff_id, "
-        "       from_user, message, created_at, to_role "
+        "       from_user, message, created_at, to_role, read_at "
         "FROM clinical_handoffs "
         "WHERE tenant_id = $1 AND pred_request_id = ANY($2::text[]) "
-        "  AND to_role = 'dentist' AND read_at IS NULL "
+        "  AND to_role = $3 "
         "ORDER BY pred_request_id, created_at DESC",
+        # ADDRESSED TO THE CALLER, not hardcoded to the dentist. The
+        # note is a message between two named people about a patient;
+        # returning the dentist's copy to whoever asked meant Kim's
+        # queue carried it too. accord_admin sees the dentist's, which
+        # is the queue they are looking at when they view the workbench.
+        #
+        # ⚠ READ ONES COME BACK TOO. Filtering on read_at IS NULL here
+        # meant the note vanished the instant the dentist opened the
+        # case — the client marks it read on render, the queue refetched,
+        # and the message they were about to read was gone. read_at now
+        # decides whether the case still NEEDS them, not whether they
+        # are allowed to see what was said.
         tenant, list(order),
+        "dentist" if claims.get("role") == "accord_admin" else claims.get("role"),
     )
     handoff_by_id = {h["pred_request_id"]: h for h in handoff_rows}
 
@@ -661,11 +676,14 @@ async def decisions_queue(
         conditions = _json(row["open_conditions"], [])
         decision = row["decision"] or "pending"
         ho = handoff_by_id.get(rid)
+        # Only an UNREAD note puts the case in the "needs you" bucket.
+        # A note already read stays on the card as context.
+        unread = ho if ho and ho["read_at"] is None else None
         needs, reason, cleared = _needs_clinician(
             signals_by_id.get(rid, []),
             open_by_id.get(rid, set()),
             justified_by_id.get(rid, set()),
-            ho,
+            unread,
             codes_by_id.get(rid, []),
         )
         out.append({
@@ -712,6 +730,9 @@ async def decisions_queue(
                     "message": ho["message"],
                     "to_role": ho["to_role"],
                     "created_at": _iso(ho["created_at"]),
+                    # NULL until the target role has seen it. The client
+                    # uses this to stop re-POSTing the read marker.
+                    "read_at": _iso(ho["read_at"]),
                 }
                 if ho
                 else None
@@ -1251,7 +1272,7 @@ async def post_feedback(
     pred_request_id: str,
     body: FeedbackRequest,
     request: Request,
-    claims=Depends(require_claims_or_demo),
+    claims=Depends(require_engine_feedback),
 ) -> FeedbackResponse:
     """Capture a human's verdict on one signal.
 
@@ -2180,6 +2201,85 @@ class SubmitRequest(BaseModel):
     attested_at: str | None = None
 
 
+async def _write_attestation(
+    os_pool, tenant, pred_request_id, signer, narrative,
+    submission_id=None,
+):
+    """The one place a signature is recorded.
+
+    Shared by /submit and /attest so the two cannot drift: the same
+    statement text, the same append-only insert, the same rule that the
+    narrative is COPIED onto the attestation rather than referenced. A
+    later edit to clinical_narratives must not change what was signed,
+    and that only holds if both routes copy it the same way.
+    """
+    if not narrative:
+        saved = await execute_os_with_tenant(
+            os_pool, tenant,
+            "SELECT narrative_text FROM clinical_narratives "
+            "WHERE tenant_id = $1 AND pred_request_id = $2",
+            tenant, pred_request_id,
+        )
+        narrative = saved[0]["narrative_text"] if saved else ""
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO clinical_attestations
+            (tenant_id, pred_request_id, attested_by, narrative_text,
+             statement, submission_id)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING attestation_id, attested_at
+        """,
+        tenant, pred_request_id, signer, narrative or None,
+        ATTESTATION_STATEMENT, submission_id,
+    )
+    # The narrative comes back with the rows: the caller needs to know
+    # which text was actually signed, and only this function knows
+    # whether it used the one it was handed or the one on file.
+    return rows, narrative
+
+
+@router.post("/decisions/{pred_request_id}/attest")
+async def attest_pred(
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_clinician_cap),
+) -> dict:
+    """Sign that the clinical record supports this pre-D. Nothing is filed.
+
+    Splitting the signature from the submission is what lets the two
+    acts belong to different people: the dentist signs from the chair,
+    billing files when the packet is ready. /submit still accepts
+    attested:true and does both at once — whether the practice uses one
+    button or two is a workflow decision, and the API supports either.
+
+    The narrative is read from clinical_narratives and copied onto the
+    attestation, exactly as /submit does it.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    _, os_pool = _pools(request)
+    rows, _signed_text = await _write_attestation(
+        os_pool, tenant, pred_request_id, claims.get("sub"), "",
+    )
+    if not rows:
+        raise HTTPException(500, "the attestation was not recorded")
+    row = rows[0]
+    return {
+        "status": "attested",
+        "pred_request_id": pred_request_id,
+        "attestation_id": row["attestation_id"],
+        "attested_by": claims.get("sub"),
+        # Server clock, never the caller's.
+        "attested_at": _iso(row["attested_at"]),
+        "statement": ATTESTATION_STATEMENT,
+        "message": (
+            "Attestation recorded. Nothing was submitted — the pre-D now "
+            "shows as ready in the billing queue."
+        ),
+    }
+
+
 @router.post("/decisions/{pred_request_id}/submit")
 async def submit_pred(
     pred_request_id: str,
@@ -2257,14 +2357,6 @@ async def submit_pred(
             """,
             tenant, pred_request_id, narrative, signer,
         )
-    elif attesting:
-        saved = await execute_os_with_tenant(
-            os_pool, tenant,
-            "SELECT narrative_text FROM clinical_narratives "
-            "WHERE tenant_id = $1 AND pred_request_id = $2",
-            tenant, pred_request_id,
-        )
-        narrative = saved[0]["narrative_text"] if saved else ""
 
     rows = await execute_os_with_tenant(
         os_pool, tenant,
@@ -2292,18 +2384,16 @@ async def submit_pred(
     # written when somebody actually signed — an empty attestation row
     # would be worse than none, because the queue reads its presence as
     # the fact that a clinician stood behind this.
-    att = await execute_os_with_tenant(
-        os_pool, tenant,
-        """
-        INSERT INTO clinical_attestations
-            (tenant_id, pred_request_id, attested_by, narrative_text,
-             statement, submission_id)
-        VALUES ($1,$2,$3,$4,$5,$6)
-        RETURNING attestation_id, attested_at
-        """,
-        tenant, pred_request_id, signer, narrative or None,
-        ATTESTATION_STATEMENT, row["submission_id"],
-    ) if attesting else []
+    att: list = []
+    if attesting:
+        # _write_attestation falls back to the narrative on file when
+        # this request carried none, and reports back which it used —
+        # so narrative_captured below is the signed text, not the
+        # request body.
+        att, narrative = await _write_attestation(
+            os_pool, tenant, pred_request_id, signer, narrative,
+            submission_id=row["submission_id"],
+        )
 
     return {
         "status": "submitted",
@@ -3207,6 +3297,104 @@ async def save_justification(
         "signal_code": req.signal_code,
         "updated_at": _iso(row["updated_at"]),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Handing a case to somebody else.
+#
+# clinical_handoffs was built read-only in 005: the queue filter read
+# it and nothing on earth wrote to it, so four buttons in the frontend
+# rendered "notified ✓" with no request behind them.
+# ─────────────────────────────────────────────────────────────────────
+
+# The roles a case can be handed TO. Not every role in the system:
+# handing work to accord_admin or to a DSO owner is not a workflow, it
+# is a typo, and an unrecognised value here means a note nobody's queue
+# will ever filter for.
+HANDOFF_ROLES = ("dentist", "front_desk", "tx_coord", "revenue_ops")
+
+
+class HandoffRequest(BaseModel):
+    to_role: str = "dentist"
+    note: str
+
+
+@router.post("/decisions/{pred_request_id}/handoff")
+async def create_handoff(
+    pred_request_id: str,
+    req: HandoffRequest,
+    request: Request,
+    claims=Depends(require_handoff_sender),
+) -> dict:
+    """Put a case in another role's queue, with a note.
+
+    Addressed to a ROLE rather than a person: "the dentist" is whoever
+    covers the chair today, and naming an individual means the case
+    vanishes when they are on leave.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+
+    note = req.note.strip()
+    if not note:
+        raise HTTPException(422, "note is empty")
+    if len(note) > 1000:
+        raise HTTPException(422, "note is longer than 1000 characters")
+    if req.to_role not in HANDOFF_ROLES:
+        raise HTTPException(
+            422,
+            f"to_role must be one of {', '.join(HANDOFF_ROLES)}",
+        )
+
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        INSERT INTO clinical_handoffs
+            (tenant_id, pred_request_id, to_role, from_user, message)
+        VALUES ($1,$2,$3,$4,$5)
+        RETURNING handoff_id, created_at
+        """,
+        tenant, pred_request_id, req.to_role, claims.get("sub"), note,
+    )
+    row = rows[0]
+    return {
+        "status": "sent",
+        "handoff_id": row["handoff_id"],
+        "pred_request_id": pred_request_id,
+        "to_role": req.to_role,
+        "created_at": _iso(row["created_at"]),
+    }
+
+
+@router.post("/decisions/{pred_request_id}/handoff/read")
+async def mark_handoff_read(
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_handoff_sender),
+) -> dict:
+    """Mark the handoffs addressed to the CALLER'S role as read.
+
+    Scoped to the caller's own role, so reading the dentist's note off
+    the screen cannot clear one addressed to the front desk. A separate
+    call rather than a side effect of the GET: a read that mutates is
+    the kind of thing a prefetch or a double-render clears by accident.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    _, os_pool = _pools(request)
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        UPDATE clinical_handoffs
+           SET read_at = NOW(), read_by = $3
+         WHERE tenant_id = $1 AND pred_request_id = $2
+           AND to_role = $4 AND read_at IS NULL
+        RETURNING handoff_id
+        """,
+        tenant, pred_request_id, claims.get("sub"), claims.get("role"),
+    )
+    return {"status": "read", "marked": len(rows)}
 
 
 class DocumentRequestItem(BaseModel):
