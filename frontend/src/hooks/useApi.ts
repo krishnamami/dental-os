@@ -137,6 +137,8 @@ export const keys = {
   denials: ["denials"] as const,
   appeals: ["appeals"] as const,
   billingAnalytics: ["analytics", "billing"] as const,
+  clinicalQueue: (date: string) => ["clinical-queue", date] as const,
+  clinical: (id: string) => ["clinical", id] as const,
 };
 
 // A pre-D's decision bundle never changes unless someone forces a
@@ -289,6 +291,133 @@ export interface BillingAnalytics {
     pended: number;
     total_value: number;
   };
+}
+
+// ── The dentist's workbench (dental-os migrations/004 + 005) ───────
+
+export interface ClinicalSignal {
+  signal_code: string;
+  finding: string | null;
+  mode: string;
+  wave: number;
+  owner_team: string | null;
+  assignee: string | null;
+  risk_level: string | null;
+  citation: string | null;
+  payer_citation: string | null;
+  recommended_action: string | null;
+  sla_hours: number | null;
+  /** The engine is not asking for anything on this one. */
+  satisfied: boolean;
+  justification: string | null;
+  justified_at: string | null;
+  document_requested: boolean;
+}
+
+export interface ClinicalBucket {
+  key: "clinical_support" | "documentation_gaps" | "payer_friction" | "integrity_provider";
+  label: string;
+  open: number;
+  signals: ClinicalSignal[];
+}
+
+export interface ClinicalView {
+  pred_request_id: string;
+  patient_name: string | null;
+  decision: string | null;
+  submission_ready: boolean;
+  status_rollup: Array<{
+    signal_code: string;
+    finding: string | null;
+    mode: string;
+    risk_level: string | null;
+  }>;
+  buckets: ClinicalBucket[];
+  unbucketed: string[];
+  procedures: Array<{
+    line_no: number;
+    cdt_code: string;
+    tooth_number: number | null;
+    description: string | null;
+    fee: number;
+    requires_pred: boolean;
+    ada_citation: string | null;
+  }>;
+  evidence: Array<{
+    document_type: string;
+    document_category: string | null;
+    tooth_number: number | null;
+    confidence_score: number;
+    received_at: string | null;
+  }>;
+  narrative: {
+    draft: string | null;
+    /** Why there is nothing to edit, when there is no draft. */
+    no_draft_reason: string | null;
+    saved: string | null;
+    source: string | null;
+    updated_at: string | null;
+  };
+  document_requests: Array<{
+    request_id: string;
+    document_type: string;
+    signal_code: string | null;
+    status: string;
+    note: string | null;
+    requested_at: string | null;
+  }>;
+  requested_types: string[];
+  attestation: {
+    attestation_id: string;
+    attested_by: string;
+    attested_at: string | null;
+    statement: string;
+  } | null;
+}
+
+/** The morning, already filtered to the cases that want a clinician. */
+export function useClinicalQueue(date: string) {
+  return useQuery({
+    queryKey: keys.clinicalQueue(date),
+    queryFn: () =>
+      get<QueueRowLite[]>(
+        `/decisions/queue?date=${encodeURIComponent(date)}&needs_clinician=true`,
+      ),
+    staleTime: 30_000,
+  });
+}
+
+export interface QueueRowLite {
+  id: string;
+  patient: string;
+  finding: string;
+  charges: number;
+  payer: string;
+  payer_id: string;
+  status: string;
+  open: number;
+  blocking: number;
+  submission_ready: boolean;
+  created_at?: string | null;
+  needs_clinician: boolean;
+  needs_reason: string | null;
+  handoff: {
+    handoff_id: string;
+    from_user: string;
+    message: string;
+    to_role: string;
+    created_at: string | null;
+  } | null;
+  cleared_count: number;
+}
+
+export function useClinical(predRequestId?: string) {
+  return useQuery({
+    queryKey: keys.clinical(predRequestId ?? ""),
+    queryFn: () => get<ClinicalView>(`/decisions/${predRequestId}/clinical`),
+    enabled: Boolean(predRequestId),
+    staleTime: 30_000,
+  });
 }
 
 export function useSubmittedOn(date: string) {
