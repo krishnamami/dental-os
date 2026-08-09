@@ -59,7 +59,9 @@ export function DatePickerDropdown({
       <select
         value={selectedDate}
         onChange={(e) => onChange(e.target.value)}
-        className="cursor-pointer rounded-lg border border-[#e5e7eb] bg-white px-3 py-1.5 text-[13px] text-[#374151] outline-none"
+        // 44px tall on a tablet, unchanged on desktop. 16px text on
+        // narrow as well: under it Safari zooms the page on focus.
+        className="cursor-pointer rounded-lg border border-[#e5e7eb] bg-white px-3 py-1.5 text-[13px] text-[#374151] outline-none max-[899px]:min-h-[44px] max-[899px]:text-[16px]"
       >
         {options.map((d) => (
           <option key={d} value={d}>

@@ -31,7 +31,7 @@
  * calls nothing, per the brief. POST /document-requests exists and is
  * tested; it is simply not wired here yet.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { DatePickerDropdown } from "../../../components/DatePickerDropdown";
@@ -53,6 +53,38 @@ import {
 import { formatCurrency, scenarioId } from "../../../utils/format";
 
 const GREEN = "#0F4D37";
+
+/**
+ * Below this, the queue and the case are two screens rather than one
+ * scroll. 900 is the number from the brief, not a Tailwind breakpoint
+ * — an iPad in portrait is 768 and lg: would fire at 1024, which is
+ * the same device in landscape.
+ */
+const NARROW_MAX = 899;
+
+/** Tap target floor. 44px is Apple's minimum and the reason the queue
+ *  rows and every control below are sized the way they are. */
+const TAP = "min-h-[44px]";
+
+function useIsNarrow(): boolean {
+  const [narrow, setNarrow] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(`(max-width: ${NARROW_MAX}px)`).matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(`(max-width: ${NARROW_MAX}px)`);
+    const onChange = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    // matchMedia rather than a resize listener: it fires once on the
+    // crossing instead of on every pixel of a drag, and it is what
+    // rotating an iPad actually triggers.
+    mq.addEventListener("change", onChange);
+    setNarrow(mq.matches);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
 
 /** amber = clinician-actionable · slate = informational · green =
  *  supported. The three tones the brief named, defined once. */
@@ -142,7 +174,7 @@ function SignalRow({
         <span aria-hidden="true">
           {signal.satisfied ? "✅" : tone === "action" ? "⚠" : "ℹ"}
         </span>
-        <span className={`text-[12.5px] font-semibold ${t.text}`}>
+        <span className={`min-w-0 break-words text-[12.5px] font-semibold ${t.text}`}>
           {humanCode(signal.signal_code)}
         </span>
         {signal.sla_hours != null && !signal.satisfied && (
@@ -179,7 +211,7 @@ function SignalRow({
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11.5px] font-medium text-slate-700 transition hover:bg-slate-50"
+              className={`${TAP} cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1 text-[11.5px] font-medium text-slate-700 transition hover:bg-slate-50`}
             >
               {signal.justification ? "Edit justification" : "Justify necessity"}
             </button>
@@ -189,7 +221,7 @@ function SignalRow({
               type="button"
               disabled={requested}
               onClick={onRequest}
-              className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11.5px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-default disabled:opacity-60"
+              className={`${TAP} cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1 text-[11.5px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-default disabled:opacity-60`}
             >
               {requested ? "Requested ✓" : "Request now"}
             </button>
@@ -205,7 +237,10 @@ function SignalRow({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Why is this met despite the engine not confirming it?"
-            className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-[12.5px] leading-relaxed text-slate-900 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500"
+            /* 16px on narrow for the same reason as the narrative:
+               under it Safari zooms, and a zoomed page scrolls
+               sideways. */
+            className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-[12.5px] leading-relaxed text-slate-900 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500 max-[899px]:text-[16px]"
           />
           <div className="mt-1.5 flex flex-wrap gap-2">
             <button
@@ -214,7 +249,7 @@ function SignalRow({
               onClick={() => {
                 void onJustify(text.trim()).then(() => setEditing(false));
               }}
-              className="cursor-pointer rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60"
+              className={`${TAP} cursor-pointer rounded-lg px-3.5 py-1.5 text-[12px] font-semibold text-white disabled:opacity-60`}
               style={{ backgroundColor: GREEN }}
             >
               {busy ? "Saving…" : "Save justification"}
@@ -225,7 +260,7 @@ function SignalRow({
                 setText(signal.justification ?? "");
                 setEditing(false);
               }}
-              className="cursor-pointer rounded-lg px-3 py-1.5 text-[12px] text-slate-500 hover:text-slate-800"
+              className={`${TAP} cursor-pointer rounded-lg px-3.5 py-1.5 text-[12px] text-slate-500 hover:text-slate-800`}
             >
               Cancel
             </button>
@@ -268,10 +303,15 @@ export default function WorkbenchClinicalView() {
     selectedId ?? undefined,
   );
 
+  const isNarrow = useIsNarrow();
+  // Narrow only. On desktop both panes are always on screen and this
+  // is ignored, so the desktop layout cannot be affected by it.
+  const [showDetail, setShowDetail] = useState(false);
   const [narrative, setNarrative] = useState("");
   const [attested, setAttested] = useState(false);
   const [requested, setRequested] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
+  const narrativeRef = useRef<HTMLTextAreaElement>(null);
 
   // Reset per case. Carrying one patient's narrative onto the next
   // card is the worst bug this screen could have.
@@ -362,8 +402,12 @@ export default function WorkbenchClinicalView() {
     }
   }
 
+  // overflow-x-hidden below is the backstop, not the fix: every child
+  // is already allowed to shrink (min-w-0) or wrap. It is there so one
+  // long unbroken string in a finding cannot put the whole page into a
+  // sideways scroll on a device with no scrollbar to show for it.
   return (
-    <div className="relative mx-auto max-w-4xl px-6 py-6 pb-16">
+    <div className="relative mx-auto max-w-4xl overflow-x-hidden px-6 py-6 pb-16 max-[899px]:px-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-[22px] font-semibold text-gray-900">
@@ -399,18 +443,23 @@ export default function WorkbenchClinicalView() {
         </p>
       )}
 
-      {open.length > 0 && (
-        <div className="mt-5 flex flex-wrap gap-2">
+      {open.length > 0 && (!isNarrow || !showDetail) && (
+        // Narrow: full-width rows, one per line, each a 44px target.
+        // Wide: the chip row exactly as it was.
+        <div className="mt-5 flex flex-wrap gap-2 max-[899px]:flex-col">
           {open.map((r) => {
             const on = r.id === selectedId;
             return (
               <button
                 key={r.id}
                 type="button"
-                onClick={() => setClickedId(r.id)}
+                onClick={() => {
+                  setClickedId(r.id);
+                  setShowDetail(true);
+                }}
                 aria-pressed={on}
-                className={`cursor-pointer rounded-xl border px-3.5 py-2.5 text-left transition ${
-                  on
+                className={`${TAP} cursor-pointer rounded-xl border px-3.5 py-2.5 text-left transition max-[899px]:w-full ${
+                  on && !isNarrow
                     ? "border-2 border-accord-green-500 bg-accord-green-50"
                     : "border-gray-200 bg-white hover:bg-slate-50"
                 }`}
@@ -418,8 +467,15 @@ export default function WorkbenchClinicalView() {
                 <span className="block text-[13px] font-semibold text-slate-800">
                   {r.patient}
                 </span>
-                <span className="mt-0.5 block text-[11px] text-amber-800">
-                  {r.needs_reason ?? scenarioId(r.id)}
+                <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-amber-800">
+                  <span className="min-w-0 flex-1 truncate">
+                    {r.needs_reason ?? scenarioId(r.id)}
+                  </span>
+                  {isNarrow && (
+                    <span aria-hidden="true" className="text-slate-400">
+                      ›
+                    </span>
+                  )}
                 </span>
               </button>
             );
@@ -427,14 +483,24 @@ export default function WorkbenchClinicalView() {
         </div>
       )}
 
-      {viewLoading && selectedId && (
+      {isNarrow && showDetail && (
+        <button
+          type="button"
+          onClick={() => setShowDetail(false)}
+          className={`${TAP} -ml-1 mt-4 flex items-center gap-1.5 px-1 text-[13px] font-medium text-slate-600`}
+        >
+          ← Back to queue
+        </button>
+      )}
+
+      {(!isNarrow || showDetail) && viewLoading && selectedId && (
         <div className="mt-6 animate-pulse space-y-3">
           <div className="h-24 rounded-xl bg-gray-100" />
           <div className="h-40 rounded-xl bg-gray-100" />
         </div>
       )}
 
-      {view && !viewLoading && (
+      {(!isNarrow || showDetail) && view && !viewLoading && (
         <>
           {/* ── The case ────────────────────────────────────────── */}
           <section className="mt-6 rounded-xl border border-gray-200 bg-white p-5">
@@ -534,13 +600,35 @@ export default function WorkbenchClinicalView() {
               </p>
             )}
 
+            {/* ⚠ iOS KEYBOARD. Safari does not resize the layout
+                viewport when the keyboard opens — it scrolls the page
+                and leaves the focused field wherever it lands, which
+                for a textarea near the bottom of a long document is
+                behind the keyboard. scrollIntoView on focus puts it at
+                the top of what remains visible. The 16px font size is
+                not cosmetic either: Safari zooms the whole page on
+                focus for anything under 16px, and a zoomed page then
+                scrolls sideways. */}
             <textarea
+              ref={narrativeRef}
               rows={5}
               value={narrative}
               onChange={(e) => setNarrative(e.target.value)}
+              onFocus={() => {
+                window.setTimeout(() => {
+                  // center, not start: the header is sticky at 52px,
+                  // so scrolling the textarea to the top of the
+                  // viewport puts its first line behind it. Centering
+                  // in what the keyboard leaves visible clears both.
+                  narrativeRef.current?.scrollIntoView({
+                    block: "center",
+                    behavior: "smooth",
+                  });
+                }, 250);
+              }}
               onBlur={() => void saveNarrative()}
               placeholder="Describe the finding, the measurement and why the treatment is indicated."
-              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-[13px] leading-relaxed text-slate-900 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500"
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-[13px] leading-relaxed text-slate-900 focus:border-accord-green-500 focus:outline-none focus:ring-1 focus:ring-accord-green-500 max-[899px]:text-[16px]"
             />
             <p className="mt-1 text-[11px] text-slate-400">
               Saves when you click away.
@@ -559,12 +647,17 @@ export default function WorkbenchClinicalView() {
               </p>
             )}
 
-            <label className="flex cursor-pointer items-start gap-2.5">
+            {/* py-2.5 on the LABEL, not just the box: a 16px checkbox
+                is an unusable target on glass, and the whole line is
+                clickable anyway. */}
+            <label
+              className={`${TAP} flex cursor-pointer items-start gap-2.5 py-2.5`}
+            >
               <input
                 type="checkbox"
                 checked={attested}
                 onChange={(e) => setAttested(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-accord-green-900 focus:ring-accord-green-500"
+                className="mt-0.5 h-5 w-5 flex-shrink-0 rounded border-gray-300 text-accord-green-900 focus:ring-accord-green-500"
               />
               <span className="text-[12.5px] leading-relaxed text-slate-700">
                 I attest that the clinical record supports the procedures
@@ -592,7 +685,7 @@ export default function WorkbenchClinicalView() {
                   ? undefined
                   : "Tick the attestation before submitting"
               }
-              className="mt-3 cursor-pointer rounded-lg border-none px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className={`${TAP} mt-3 cursor-pointer rounded-lg border-none px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 max-[899px]:w-full`}
               style={{ backgroundColor: GREEN }}
             >
               {busy === "submit" ? "Submitting…" : "Attest and submit pre-D"}

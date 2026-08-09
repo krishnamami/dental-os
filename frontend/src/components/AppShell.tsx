@@ -99,7 +99,7 @@ export default function AppShell() {
             <button
               type="button"
               onClick={signOutAndLeave}
-              className="rounded-lg border border-[#d1d5db] bg-white px-3 py-1 text-sm text-[#111111] transition hover:bg-slate-50"
+              className="rounded-lg border border-[#d1d5db] bg-white px-3 py-1 text-sm text-[#111111] transition hover:bg-slate-50 max-[899px]:min-h-[44px]"
             >
               Sign out
             </button>
