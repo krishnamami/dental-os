@@ -777,7 +777,8 @@ class TestUpcoding:
         )
         out = resolve_upcoding(ctx, rules)
         assert out["any_fraud_signal"] is True
-        assert "FRAUD_UPCODING" in out["signal_types"]
+        assert "BILLING_UNBILLED_PROCEDURE" in out["signal_types"]
+        assert "FRAUD_UPCODING" not in out["signal_types"]
         assert out["note_codes"] == ["D2740", "D2750"]
 
     def test_da_a01_clean(self, rules):

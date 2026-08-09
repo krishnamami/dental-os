@@ -40,7 +40,7 @@ EXPECTED: dict[str, dict] = {
         "must_have": ["COVERAGE_BUNDLING_CONFLICT",
                       "DOC_NARRATIVE_MISSING",
                       "CLINICAL_CRITERIA_MET"],
-        "must_not_have": ["FRAUD_UPCODING",
+        "must_not_have": ["BILLING_UNBILLED_PROCEDURE",
                           "PROVIDER_OIG_EXCLUDED"],
     },
     "PRED-SIM-DA-B01": {
@@ -67,7 +67,7 @@ EXPECTED: dict[str, dict] = {
     },
     "PRED-SIM-DA-F01": {
         "decision": "pended",
-        "must_have": ["FRAUD_UPCODING"],
+        "must_have": ["BILLING_UNBILLED_PROCEDURE"],
     },
     "PRED-SIM-DA-F02": {
         "decision": "denied",

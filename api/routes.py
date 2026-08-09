@@ -295,9 +295,42 @@ async def _readiness_flags(
     flags = _json(rows[0].get("readiness_flags"), None)
     if not isinstance(flags, dict) or not flags:
         return None
-    # Coerce to bool: the column is the engine's, but a client typed
-    # against dict[str, bool] should not receive a stray null.
-    return {k: bool(v) for k, v in flags.items()}
+    flags = {k: bool(v) for k, v in flags.items()}
+
+    # ⚠ RECONCILE no_fraud_signals AGAINST THE BUNDLE.
+    #
+    # The simulator computes it as "no FRAUD_* code in
+    # pred_states.open_conditions" — and open_conditions has never
+    # contained one: zero rows across the corpus. Integrity findings
+    # live in the persona bundle instead, so the flag read true on a
+    # case showing two of them, which is the readiness badge and the
+    # conditions list contradicting each other on one screen.
+    #
+    # The real fix belongs in dental-simulator's readiness_assembler,
+    # which is read-only from here (CONTEXT.md RULE 15). This corrects
+    # the answer at the point of use and leaves the engine's own copy
+    # untouched.
+    if "no_fraud_signals" in flags:
+        _, os_pool = _pools(request)
+        try:
+            bundle_rows = await execute_os_with_tenant(
+                os_pool, tenant,
+                "SELECT all_signals FROM persona_bundles "
+                "WHERE tenant_id = $1 AND pred_request_id = $2 AND is_current",
+                tenant, pred_request_id,
+            )
+            codes = {
+                sig.get("signal_code")
+                for row in bundle_rows
+                for sig in _json(row["all_signals"], [])
+                if isinstance(sig, dict)
+            }
+            if any(str(c).startswith("FRAUD_") for c in codes if c):
+                flags["no_fraud_signals"] = False
+        except Exception as exc:  # noqa: BLE001 — never 500 the bundle
+            logger.warning("integrity reconcile failed for %s: %s",
+                           pred_request_id, exc)
+    return flags
 
 
 def _open_condition_codes(signals: list[dict]) -> list[str]:
@@ -656,6 +689,7 @@ async def decisions_queue(
         tenant, list(order),
     )
     blocking: dict[str, int] = {}
+    actionable: dict[str, int] = {}
     signals_by_id: dict[str, list[dict]] = {}
     open_by_id: dict[str, set[str]] = {}
     for b in bundles:
@@ -665,6 +699,16 @@ async def decisions_queue(
         blocking[b["pred_request_id"]] = sum(
             1 for s in signals
             if isinstance(s, dict) and s.get("mode") == "human_approval"
+        )
+        # ⚠ THE SAME PREDICATE GET /decisions/:id/conditions USES.
+        # `open` used to be len(pred_states.open_conditions), which is a
+        # different set entirely — the queue said "2 open" about a case
+        # whose conditions list returned five. One of those numbers was
+        # always going to be wrong and there was no way to tell which.
+        actionable[b["pred_request_id"]] = sum(
+            1 for s in signals
+            if isinstance(s, dict)
+            and (s.get("mode") == "human_approval" or s.get("recommended_action"))
         )
 
     # Two more queries for the whole page, not two per row.
@@ -760,8 +804,11 @@ async def decisions_queue(
             # filed against a payer that does not exist.
             "payer_id": row["payer_id"],
             "status": decision,
-            "open": len(conditions),
-            "blocking": blocking.get(rid, 0),
+            # Counts what the conditions endpoint would return for this
+            # pre-D, including the synthesised attestation condition —
+            # so "n open" on the card and the list behind it agree.
+            "open": actionable.get(rid, 0) + (0 if rid in attested_by_id else 1),
+            "blocking": blocking.get(rid, 0) + (0 if rid in attested_by_id else 1),
             # The ENGINE's verdict, unchanged: every open condition is
             # cleared. It says nothing about whether a human signed,
             # which is why `attested` is a separate field rather than

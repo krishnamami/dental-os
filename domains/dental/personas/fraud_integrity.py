@@ -35,7 +35,14 @@ COVERAGE_DOMAIN_FIELDS = {
 }
 
 SIGNAL_MODES = {
-    "FRAUD_UPCODING": "human_approval",
+    # No FRAUD_UPCODING: the detector no longer emits it, because the
+    # check that carried the name tested the opposite condition. See
+    # core/resolvers/upcoding_detector.py.
+    #
+    # `recommend`, not human_approval: the chart records more work than
+    # the claim bills for. Nobody is over-charged, so it does not hold
+    # a submission — it is money the practice is leaving behind.
+    "BILLING_UNBILLED_PROCEDURE": "recommend",
     "FRAUD_PHANTOM_PROCEDURE": "human_approval",
     "FRAUD_WAIVED_COPAY": "human_approval",
     "FRAUD_UNBUNDLING": "human_approval",

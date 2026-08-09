@@ -145,6 +145,12 @@ class PreDAssessment(DentalPersona):
                 reasons.append(
                     f"{len(open_conditions)} open condition(s): "
                     f"{', '.join(str(c) for c in open_conditions[:4])}"
+                    # The count is len(), the list is [:4]. Without this
+                    # the sentence said "6 open condition(s)" and then
+                    # named four, which reads as a miscount rather than
+                    # a truncation.
+                    + (f" and {len(open_conditions) - 4} more"
+                       if len(open_conditions) > 4 else "")
                 )
             if escalations:
                 reasons.append(

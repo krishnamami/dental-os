@@ -11,11 +11,27 @@ what it means. That is why fraud_integrity is human_approval and why
 every signal carries the two values it compared.
 
 Signals, per decisions.yaml fraud_integrity.signals_emitted:
-  FRAUD_UPCODING           billed code richer than the note documents
   FRAUD_PHANTOM_PROCEDURE  billed procedure the chart cannot support
   FRAUD_SURFACE_CONFLICT   billed surface disagrees with the radiograph
   FRAUD_FREQUENCY_GAMING   procedure lands just inside a frequency limit
   FRAUD_WAIVED_COPAY       submitted fee exactly equals the allowed amount
+  BILLING_UNBILLED_PROCEDURE  the chart documents work not on the claim
+
+⚠ FRAUD_UPCODING IS NO LONGER EMITTED, and the reason matters.
+
+Its definition is "billed code richer than the note documents". The
+branch that carried the name tested the OPPOSITE — it fired when the
+note listed a code the claim did not, which is under-billing. Every
+firing accused a practice of upcoding on evidence that they had
+under-charged.
+
+Detecting the real thing needs a way to rank two CDT codes by richness
+(D2394 four-surface against D2391 one-surface). `cdt_codes` carries no
+tier, rank or relative-value column, and `fee_schedules` prices codes
+per payer rather than ordering them clinically. So the check cannot be
+written from what exists, and leaving a differently-shaped check under
+its name was worse than not having it. The under-billing finding it
+actually computed is real and is kept, correctly named.
 """
 from __future__ import annotations
 
@@ -63,20 +79,24 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
     xray = find_evidence(context, "XRAY_PA")
     perio = find_evidence(context, "PERIO_CHART")
 
-    # ── FRAUD_UPCODING ───────────────────────────────────────────────
-    # The note lists a code that was NOT billed, alongside the one that
-    # was. Two codes for one procedure in the note means the chart
-    # recorded one thing and the claim said another.
+    # ── BILLING_UNBILLED_PROCEDURE ───────────────────────────────────
+    # The note lists a code that was NOT billed, alongside one that was.
+    # The chart recorded more work than the claim asks to be paid for.
+    #
+    # This is revenue leakage or a charting slip, NOT an integrity
+    # concern, and it is severity "medium" rather than "high" for the
+    # same reason: nobody is being over-charged. It used to be emitted
+    # as FRAUD_UPCODING — see the module docstring.
     for proc in procedures:
         extra = [c for c in note_codes if c not in billed_codes]
         if note_codes and proc.cdt_code in note_codes and extra:
             signals.append(_signal(
-                "FRAUD_UPCODING",
+                "BILLING_UNBILLED_PROCEDURE",
                 proc.cdt_code,
                 f"Clinical note documents {note_codes} but only {billed_codes} "
                 f"billed. {', '.join(extra)} appears in the chart and not on the "
                 f"claim — confirm which procedure was actually performed.",
-                "high",
+                "medium",
             ))
             break
 

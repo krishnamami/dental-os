@@ -263,7 +263,7 @@ class TestFraudIntegrity:
         out = FraudIntegrity().run(c)
         assert codes(out) == ["INTEGRITY_VERIFIED"]
 
-    def test_da_f01_upcoding_human_approval(self, rules):
+    def test_da_f01_unbilled_procedure_advises(self, rules):
         c = ctx_with_rules(
             rules, scenario_id="DA-F01", patient_name="Thomas Garcia",
             procedures=[proc("D2740", tooth=3, fee=1650.0, allowed=1250.0,
@@ -272,9 +272,14 @@ class TestFraudIntegrity:
                 "cdt_codes_noted": ["D2740", "D2750"],
                 "narrative_present": True})])
         out = FraudIntegrity().run(c)
-        s = by_code(out, "FRAUD_UPCODING")
-        assert s["mode"] == "human_approval"
+        # DA-F01: the note records D2740 AND D2750; only D2740 was
+        # billed. That is under-billing, so it advises rather than
+        # holding the submission — and it must not be reported as
+        # upcoding, which is the opposite finding.
+        s = by_code(out, "BILLING_UNBILLED_PROCEDURE")
+        assert s["mode"] == "recommend"
         assert s["data"]["note_codes"] == ["D2740", "D2750"]
+        assert not [x for x in out if x["signal_code"] == "FRAUD_UPCODING"]
 
     def test_da_f02_phantom_procedure(self, rules):
         c = ctx_with_rules(
