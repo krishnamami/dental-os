@@ -44,10 +44,19 @@ from __future__ import annotations
 import asyncio
 import os
 import pathlib
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import asyncpg
 from dotenv import load_dotenv
+
+# The repo root, so this runs as `python scripts/seed_billing_timeline.py`
+# from anywhere rather than only as a module.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from core.catalogue.context_enricher import ContextEnricher
+from core.context.context_builder import ContextBuilder
+from core.resolvers.appeal_viability_resolver import resolve_appeal_viability
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -152,6 +161,41 @@ async def _from_corpus(sim_url: str) -> dict:
         await sim.close()
 
 
+async def _prediction_at_filing(sim_url, os_url, pred_request_id, filed_on):
+    """What the engine would have said on the day this was filed.
+
+    ⚠ RECONSTRUCTED, NOT INVENTED — and reconstructable only because
+    `today` is an argument. resolve_appeal_viability short-circuits once
+    the appeal deadline has passed, so running it now would report
+    "deadline passed" for B01 (window closed 22 Jul) rather than the
+    verdict anyone actually had on 29 May. Passing filed_on rolls the
+    clock back to the day of the decision.
+
+    Everything else it reads is static fixture data — no evidence,
+    narrative or justification has been written for these three cases
+    since the corpus was generated — so the rest of the answer is the
+    same today as it was then.
+
+    Returns (viable, probability) or (None, None) when the engine has
+    no opinion to record. NULL is the honest answer; the UI renders
+    "no prediction on record" rather than a plausible number.
+    """
+    sim = await asyncpg.create_pool(sim_url, min_size=1, max_size=2)
+    osp = await asyncpg.create_pool(os_url, min_size=1, max_size=2)
+    try:
+        ctx = await ContextBuilder(sim, osp).build(pred_request_id, TENANT)
+        ctx = await ContextEnricher(sim).enrich(ctx, TENANT)
+        v = resolve_appeal_viability(ctx, ctx.catalogue_rules, today=filed_on)
+        if v.get("applicable") is False:
+            return None, None
+        prob = v.get("success_probability")
+        return v.get("viable"), (
+            round(float(prob), 3) if prob is not None else None)
+    finally:
+        await sim.close()
+        await osp.close()
+
+
 async def main() -> None:
     os_url = os.environ["DENTAL_OS_DATABASE_URL"]
     corpus = await _from_corpus(os.environ["DENTAL_DATABASE_URL"])
@@ -229,21 +273,30 @@ async def main() -> None:
                     corpus[c["pred"]]["amount"], deadline, c["note"],
                 )
 
+                pred_viable, pred_prob = await _prediction_at_filing(
+                    os.environ["DENTAL_DATABASE_URL"],
+                    os.environ["DENTAL_OS_DATABASE_URL"],
+                    c["pred"], filed.date(),
+                )
                 await conn.execute(
                     """
                     INSERT INTO appeal_events
                         (tenant_id, pred_request_id, denial_id, patient_name,
                          payer_id, filed_by, filed_at, appeal_type, status,
-                         resolved_at, recovered_amount, notes)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,'standard',$8,$9,$10,$11)
+                         resolved_at, recovered_amount, notes,
+                         predicted_viable, predicted_probability)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,'standard',$8,$9,$10,$11,
+                            $12,$13)
                     """,
                     TENANT, c["pred"], denial_id, corpus[c["pred"]]["patient"],
                     PAYER, biller, filed, c["appeal_status"], resolved,
                     (corpus[c["pred"]]["amount"] if c["recovers"]
                      else (0.00 if resolved else None)),
-                    c["note"],
+                    c["note"], pred_viable, pred_prob,
                 )
 
+                print(f"      engine at filing: viable={pred_viable} "
+                      f"p={pred_prob}")
                 print(f"  {c['pred']}  submitted {submitted:%Y-%m-%d}"
                       f" -> denied {denied:%Y-%m-%d}"
                       f" -> filed {filed:%Y-%m-%d}"

@@ -184,10 +184,15 @@ async def _build_context(request: Request, pred_request_id: str):
     that RLS cannot see is indistinguishable from one that does not
     exist, and both are "not found" to a caller.
     """
-    sim, _ = _pools(request)
+    sim, os_pool = _pools(request)
     tenant = await _tenant_for(request, pred_request_id)
     try:
-        context = await ContextBuilder(sim).build(pred_request_id, tenant)
+        # BOTH pools. Without os_pool the context carries no
+        # denial_event, so resolve_appeal_viability falls back to
+        # payer_responses.appeal_deadline — the fixture that says
+        # 2026-10-05 for a denial whose real window closed 2026-07-22.
+        context = await ContextBuilder(sim, os_pool).build(
+            pred_request_id, tenant)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -2617,18 +2622,44 @@ async def file_appeal(
     tenant = tenant_filter(claims) or owner
     _, os_pool = _pools(request)
 
+    # ── What the engine expected, BEFORE the payer answers ──────────
+    # Written here and never recomputed. resolve_appeal_viability does
+    # not return the same answer twice — it reads evidence that
+    # accumulates and short-circuits once the deadline passes — so
+    # re-running it after the outcome tells you about today, not about
+    # what anyone believed when they filed.
+    #
+    # A failure here must not stop an appeal being filed. NULL means
+    # "no prediction on record", which the UI renders as exactly that.
+    predicted_viable = None
+    predicted_probability = None
+    try:
+        ctx = await _build_context(request, req.pred_request_id)
+        viability = resolve_appeal_viability(ctx, ctx.catalogue_rules)
+        if viability.get("applicable") is not False:
+            predicted_viable = viability.get("viable")
+            prob = viability.get("success_probability")
+            predicted_probability = (
+                round(float(prob), 3) if prob is not None else None
+            )
+    except Exception as exc:  # noqa: BLE001 — never block the filing
+        logger.warning("appeal prediction snapshot failed for %s: %s",
+                       req.pred_request_id, exc)
+
     rows = await execute_os_with_tenant(
         os_pool, tenant,
         """
         INSERT INTO appeal_events
             (tenant_id, pred_request_id, denial_id, patient_name,
-             payer_id, filed_by, appeal_type, status, notes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'filed',$8)
+             payer_id, filed_by, appeal_type, status, notes,
+             predicted_viable, predicted_probability)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'filed',$8,$9,$10)
         ON CONFLICT (tenant_id, pred_request_id) DO NOTHING
         RETURNING appeal_id, filed_at, status
         """,
         tenant, req.pred_request_id, req.denial_id, req.patient_name,
         req.payer_id, claims.get("sub"), req.appeal_type, req.notes,
+        predicted_viable, predicted_probability,
     )
 
     if not rows:
@@ -2676,6 +2707,8 @@ async def get_appeals(
         SELECT a.appeal_id, a.pred_request_id, a.patient_name, a.payer_id,
                a.filed_at, a.appeal_type, a.status, a.resolved_at,
                a.recovered_amount, a.notes,
+               -- The engine's verdict as it stood when this was filed.
+               a.predicted_viable, a.predicted_probability,
                d.denial_reason, d.denied_amount, d.appeal_probability,
                d.appeal_deadline
         FROM appeal_events a
@@ -2695,6 +2728,14 @@ async def get_appeals(
             "appeal_deadline": _iso(r["appeal_deadline"]),
             "days_to_deadline": _days_until(r["appeal_deadline"]),
             "denied_amount": _f(r["denied_amount"]),
+            "predicted_viable": r["predicted_viable"],
+            # 0-1 in the column, percent on the screen. Converted once,
+            # here, so no component has to remember the scale.
+            "predicted_probability": (
+                round(float(r["predicted_probability"]) * 100)
+                if r["predicted_probability"] is not None
+                else None
+            ),
             # None, not 0.0: an unresolved appeal has recovered nothing
             # YET, which is a different fact from recovering zero.
             "recovered_amount": (
