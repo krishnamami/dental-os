@@ -29,6 +29,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from core.dates import day_window, local_today, require_date
 from api.auth import (
     TENANT_CONTACTS,
     assert_tenant_allowed,
@@ -397,19 +398,14 @@ async def submitted_on(
     # `date` in the URL, not in Python - this module imports
     # datetime.date and a parameter of that name shadows it.
     date_param: str | None = Query(None, alias="date"),
+    tz_offset: int | None = Query(None),
     claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
-    """Pre-Ds submitted on one day. Defaults to today."""
+    """Pre-Ds submitted on one LOCAL day. `date` is required — see
+    core/dates.py for why there is no server-side default."""
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     _, os_pool = _pools(request)
-
-    if date_param:
-        try:
-            on = date.fromisoformat(date_param)
-        except ValueError:
-            raise HTTPException(422, "date must be YYYY-MM-DD")
-    else:
-        on = date.today()
+    start, end = day_window(require_date(date_param), tz_offset)
 
     rows = await execute_os_with_tenant(
         os_pool, tenant,
@@ -418,10 +414,10 @@ async def submitted_on(
                submitted_at, status, expected_response_days,
                submission_method, submission_ref
         FROM submission_events
-        WHERE tenant_id = $1 AND submitted_at::date = $2
+        WHERE tenant_id = $1 AND submitted_at >= $2 AND submitted_at < $3
         ORDER BY submitted_at DESC
         """,
-        tenant, on,
+        tenant, start, end,
     )
     return [{**r, "submitted_at": _iso(r["submitted_at"])} for r in rows]
 
@@ -430,9 +426,17 @@ async def submitted_on(
 async def signed_on(
     request: Request,
     date_param: str | None = Query(None, alias="date"),
+    tz_offset: int | None = Query(None),
     claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
-    """Pre-Ds a clinician SIGNED on one day. Defaults to today.
+    """Pre-Ds a clinician SIGNED on one LOCAL day.
+
+    ⚠ THE BUG THIS FIXES. attested_at is a TIMESTAMPTZ and
+    `attested_at::date` cast it in the server's timezone — UTC. A
+    dentist signing at 20:39 Eastern wrote 00:39 UTC the next day, the
+    browser asked for its own local date, and the signature vanished
+    from SIGNED TODAY while the case reappeared in his queue. He could
+    then sign it again. See core/dates.py.
 
     The dentist's counterpart to /decisions/submitted. The two are
     deliberately different lists now that signing and filing are
@@ -448,13 +452,7 @@ async def signed_on(
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     _, os_pool = _pools(request)
 
-    if date_param:
-        try:
-            on = date.fromisoformat(date_param)
-        except ValueError:
-            raise HTTPException(422, "date must be YYYY-MM-DD")
-    else:
-        on = date.today()
+    start, end = day_window(require_date(date_param), tz_offset)
 
     rows = await execute_os_with_tenant(
         os_pool, tenant,
@@ -469,10 +467,10 @@ async def signed_on(
         LEFT JOIN submission_events s
                ON s.tenant_id = a.tenant_id
               AND s.pred_request_id = a.pred_request_id
-        WHERE a.tenant_id = $1 AND a.attested_at::date = $2
+        WHERE a.tenant_id = $1 AND a.attested_at >= $2 AND a.attested_at < $3
         ORDER BY a.pred_request_id, a.attested_at DESC
         """,
-        tenant, on,
+        tenant, start, end,
     )
     return [
         {
@@ -630,6 +628,7 @@ async def decisions_queue(
     # no row is removed, so Kim's call is unchanged in content and
     # ordering.
     needs_clinician: bool | None = Query(None),
+    tz_offset: int | None = Query(None),
     claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
     """Pre-Ds scheduled for one day, as a review queue.
@@ -645,13 +644,9 @@ async def decisions_queue(
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     sim, os_pool = _pools(request)
 
-    if date_param:
-        try:
-            appt_date = date.fromisoformat(date_param)
-        except ValueError:
-            raise HTTPException(422, "date must be YYYY-MM-DD")
-    else:
-        appt_date = date.today()
+    # appointment_date is a DATE column, so no window is needed — but
+    # the day itself still comes from the client, never from here.
+    appt_date = require_date(date_param)
 
     appts = await execute_os_with_tenant(
         os_pool, tenant,
@@ -1642,6 +1637,7 @@ async def checkin_today(
     # `date.fromisoformat` two lines down would be a string method
     # lookup on whatever the caller sent.
     date_param: str | None = Query(None, alias="date"),
+    tz_offset: int | None = Query(None),
     claims=Depends(require_claims_or_demo),
 ) -> list[dict]:
     """One day's patients, pre-computed for the check-in screen.
@@ -1653,13 +1649,7 @@ async def checkin_today(
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     sim, os_pool = _pools(request)
 
-    if date_param:
-        try:
-            appt_date = date.fromisoformat(date_param)
-        except ValueError:
-            raise HTTPException(422, "date must be YYYY-MM-DD")
-    else:
-        appt_date = date.today()
+    appt_date = require_date(date_param)
 
     # The schedule is the source of the day. A pre-D with no appointment
     # row is not that day's patient, and a cancelled one is not either.
@@ -1870,6 +1860,9 @@ async def checkin_today(
         if isinstance(enrolled, datetime):
             enrolled = enrolled.date()
         if isinstance(enrolled, date):
+            # date.today() is UTC and this is intentionally left so:
+            # it is a coarse duration in months (// 30), where a day of
+            # drift cannot change the answer. Not day membership.
             months = (date.today() - enrolled).days // 30
 
         at = checked_at.get(rid)
@@ -2000,6 +1993,11 @@ async def create_appointment(
 class CheckInRequest(BaseModel):
     pred_request_id: str
     patient_name: str
+    # Minutes to add to local time to get UTC, from the browser. Without
+    # it checkin_day defaulted to CURRENT_DATE — UTC — so a patient
+    # checked in at 8:30pm Eastern was recorded as arriving TOMORROW and
+    # vanished from the day the front desk was looking at.
+    tz_offset: int | None = None
 
 
 @router.post("/checkin")
@@ -2019,14 +2017,15 @@ async def check_in_patient(
         os_pool, tenant,
         """
         INSERT INTO checkin_events
-            (pred_request_id, tenant_id, patient_name, checked_in_by)
-        VALUES ($1, $2, $3, $4)
+            (pred_request_id, tenant_id, patient_name, checked_in_by,
+             checkin_day)
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (tenant_id, pred_request_id, checkin_day) DO UPDATE
             SET patient_name = EXCLUDED.patient_name
         RETURNING checked_in_at
         """,
         body.pred_request_id, tenant, body.patient_name,
-        claims.get("sub", "demo-user"),
+        claims.get("sub", "demo-user"), local_today(body.tz_offset),
     )
     return {
         "status": "checked_in",
@@ -2347,6 +2346,32 @@ async def _write_attestation(
     later edit to clinical_narratives must not change what was signed,
     and that only holds if both routes copy it the same way.
     """
+    # ⚠ ONE SIGNATURE PER PRE-D, ENFORCED HERE.
+    #
+    # clinical_attestations is append-only and immutable — it is the
+    # record of a clinician putting their name to a treatment plan. A
+    # UTC/local date bug was enough to make the signed case reappear in
+    # the dentist's queue, and nothing stopped him signing it again.
+    # Two rows for one act is a corrupt audit trail, and the cause does
+    # not matter: no bug anywhere else should be able to produce one.
+    #
+    # 409, not 422: the request was well-formed, the state says no.
+    existing = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT attested_at FROM clinical_attestations "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 "
+        "ORDER BY attested_at DESC LIMIT 1",
+        tenant, pred_request_id,
+    )
+    if existing:
+        raise HTTPException(
+            409,
+            f"{pred_request_id} was already signed at "
+            f"{_iso(existing[0]['attested_at'])}. A pre-D carries one "
+            f"attestation; to change what was signed, the narrative has "
+            f"to be corrected and the case re-submitted.",
+        )
+
     if not narrative:
         saved = await execute_os_with_tenant(
             os_pool, tenant,
@@ -2559,6 +2584,12 @@ async def submit_pred(
 
 
 def _days_until(when) -> Optional[int]:
+    # ⚠ UTC, and a known residual. This is a DURATION — "43 days left"
+    # — so the worst case is off by one near midnight UTC, not a
+    # vanished record. Making it exact means plumbing tz_offset into
+    # /appeals and /denials, neither of which takes a date at all.
+    # Logged in core/dates.py's rule as the one place still on the
+    # server clock.
     return (when.date() - date.today()).days if when else None
 
 
