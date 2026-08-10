@@ -29,7 +29,12 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from core.dates import day_window, local_today, require_date
+from core.dates import (
+    day_window,
+    local_today,
+    parse_offset,
+    require_date,
+)
 from api.auth import (
     TENANT_CONTACTS,
     assert_tenant_allowed,
@@ -646,6 +651,14 @@ async def decisions_queue(
 
     # appointment_date is a DATE column, so no window is needed — but
     # the day itself still comes from the client, never from here.
+    #
+    # parse_offset is called for its BOUNDS CHECK, not its value. This
+    # route accepts tz_offset because every day-scoped call sends one
+    # (useDatePicker.dayParams), and an accepted-but-unvalidated
+    # parameter is how ?tz_offset=9999 used to come back 200 here while
+    # /decisions/signed refused it — the same request, two answers,
+    # depending which screen made it.
+    parse_offset(tz_offset)
     appt_date = require_date(date_param)
 
     appts = await execute_os_with_tenant(
@@ -1642,13 +1655,18 @@ async def checkin_today(
 ) -> list[dict]:
     """One day's patients, pre-computed for the check-in screen.
 
-    Defaults to today. An unparseable ?date is a 422 rather than a
-    silent fall back to today — a screen that quietly shows a different
-    day than the one in its own dropdown is worse than an error.
+    ⚠ IT DOES NOT DEFAULT TO TODAY, whatever this docstring said before
+    core/dates.py existed. A missing ?date is a 422: a screen quietly
+    showing a different day than the one in its own dropdown is worse
+    than an error, and so is a server picking the day in UTC.
     """
     tenant = tenant_filter(claims) or DEFAULT_TENANT
     sim, os_pool = _pools(request)
 
+    # For the bounds check only — appointment_date is a DATE column and
+    # needs no window. See the same call in decisions_queue for why an
+    # unvalidated tz_offset is not harmless.
+    parse_offset(tz_offset)
     appt_date = require_date(date_param)
 
     # The schedule is the source of the day. A pre-D with no appointment
