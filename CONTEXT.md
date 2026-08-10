@@ -395,6 +395,86 @@ chain lives inside dental-os and is built in `migrations/009`:
 
 ---
 
+## Infrastructure Ownership — most of dental-os is not in any stack
+
+⚠ READ THIS BEFORE CHANGING ANYTHING IN AWS FOR dental-os, AND BEFORE
+BELIEVING A CLEAN DRIFT REPORT.
+
+**dental-os's ECS service, its task definition and its `/ecs/dental-os`
+log group are in no CloudFormation stack.** They were created directly
+through the API and are managed by hand. The only dental-os
+infrastructure under IaC is the two IAM roles it *shares* with
+dental-api, and those live in **dental-simulator**:
+
+    dental-simulator/infra/cloudformation/04-ecs.yaml   (stack: dental-ecs)
+      TaskExecutionRole   dental-task-execution-role    shared
+      TaskRole            dental-task-role              shared
+
+    dental-api stack        owns dental-api-service
+    no stack                owns dental-os-service
+    no stack                owns task definition dental-os
+    no stack                owns log group /ecs/dental-os
+
+**Drift detection cannot see any of it.** `detect-stack-drift` compares
+live resources against a stack's *stored template*; a resource no stack
+declares is not drift, it is invisible. `dental-ecs` reporting IN_SYNC
+would say nothing at all about the dental-os service.
+
+### Why the roles drifted twice
+
+Because they are the one seam. When dental-os needs a permission, the
+shared role has to be edited by hand — and the template in the other
+repo does not follow, because RULE 15 makes it read-only from here.
+Both drifts came from exactly that:
+
+  · **TaskExecutionRole** was widened by hand for dental-os's ECR
+    repository and log group. The template named `dental-api` alone, so
+    a deploy would have removed dental-os's image pull and left the
+    service unable to start its next task.
+  · **TaskRole** was narrowed by hand to `s3:GetObject` on the document
+    bucket. The template still granted PutObject, DeleteObject and
+    ListBucket, so a deploy would have silently re-widened it.
+
+Both are reconciled in the template as of 10 Aug 2026. The stack is
+still reported DRIFTED and will be until someone deploys: editing the
+file does not change what CloudFormation has stored.
+
+`tests/test_iam_grant.py` asserts the S3 grant from this side, by
+asking IAM for the effective decision. It is the alarm for a redeploy
+that reverts the narrowing.
+
+### A deploy of dental-ecs is not a no-op
+
+`TaskDefinition` references both role ARNs through `GetAtt`, which
+CloudFormation treats as `RequiresRecreation: Always`. Deploying the
+stack cuts a new `dental-api` task-definition revision. Harmless
+**today** — `dental-api-service` is pinned to a revision and will not
+move on its own, and `dental-os-service` is a different family
+entirely — but it is a change, not a formality, and it should be a
+decision rather than a side effect of reconciling drift.
+
+### Hand-managed settings that no stack will restore
+
+Anything set directly is lost the day these resources are rebuilt, and
+nothing will report it missing:
+
+  · `/ecs/dental-os` retention = **30 days**, set 10 Aug 2026 with
+    `aws logs put-retention-policy`, to match `/ecs/dental-api`. It had
+    none, meaning logs never expired. The group was 3 days old and 3 MB
+    at the time, so nothing was deleted and the cost was about $0.0001
+    a month — this was about the data lifecycle, not the bill.
+  · `dental-task-role`'s S3 grant, until the stack is next deployed.
+
+### Adopting them is a separate job
+
+Bringing the service, task definition and log group under IaC needs
+`create-change-set --import-existing-resources`, not a template edit —
+a plain deploy fails with "already exists" on every one of them.
+**Deferred deliberately.** Until it happens, treat any AWS change for
+dental-os as manual, and write it down here.
+
+---
+
 ## Confidence Threshold Reference
 
 There is no single `CONFIDENCE_FLOOR` in dental-simulator. There are two, and
