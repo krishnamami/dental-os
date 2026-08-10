@@ -89,6 +89,9 @@ async def lifespan(app: FastAPI):
     # the first request, not lazily on the first miss.
     known = await auth_module.load_tenant_directory(app.state.simulator_pool)
     logger.info("tenant directory loaded — %d practices", known)
+    from api.routes import load_payer_directory
+    payers = await load_payer_directory(app.state.simulator_pool)
+    logger.info("payer directory loaded — %d payers", payers)
     logger.info("pools open — tenant=%s", app.state.tenant_id)
     try:
         yield

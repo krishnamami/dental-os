@@ -182,6 +182,12 @@ async def test_payer_performance_is_scoped_and_counted(client, tokens):
     for r in rows:
         assert r["approved"] + r["denied"] <= r["total"]
         assert r["payer_name"], "a payer id with no display name"
+        # ⚠ NOT THE RAW ID. _PAYER_NAMES was a hardcoded dict whose keys
+        # said "aetna"/"humana"/"guardian" while the corpus uses
+        # aetna_dmo/humana_dpo/guardian_dpo, so three of six payers
+        # rendered as machine identifiers on an owner's screen.
+        assert r["payer_name"] != r["payer_id"], r
+        assert "_" not in r["payer_name"], r
 
     # Counted, not asserted against a literal: the per-payer totals for
     # one practice must add up to that practice's own pre-D count.
@@ -244,3 +250,51 @@ async def test_the_demo_header_cannot_read_the_portfolio(client):
 async def test_no_token_is_401(client):
     r = await client.get("/portfolio/summary")
     assert r.status_code == 401
+
+
+# ── what the screen needs in order to suppress ───────────────────────
+
+async def test_a_thin_practice_returns_its_counts_not_a_suppressed_rate(
+    client, tokens
+):
+    """⚠ SUPPRESSION IS THE UI'S JOB, AND THIS IS THE HALF THAT ENABLES IT.
+
+    Tampa has 5 pre-Ds and 3 approvals. The API must keep returning
+    both numbers — the screen decides that 5 is too thin to render 60%
+    and shows the count instead. If the API ever started suppressing,
+    the screen would have nothing left to show, and the owner would
+    lose the one comparable figure a small practice has.
+
+    The threshold lives in the frontend (MIN_RATE_DENOMINATOR in
+    utils/portfolioCauses.ts). This test asserts only that the raw
+    counts survive the trip.
+    """
+    body = await portfolio(client, tokens, "dso_owner")
+    tampa = next(p for p in body["practices"]
+                 if p["tenant_id"] == "tampa_smiles")
+
+    assert tampa["total_pre_ds"] < 10, (
+        "the fixture no longer has a practice under the threshold, so "
+        "the suppression path is untested — pick another or adjust"
+    )
+    assert tampa["approved"] >= 0 and tampa["total_pre_ds"] > 0
+    # The rate is still computed and returned; the screen ignores it.
+    assert tampa["approval_rate"] > 0
+    assert tampa["avg_criteria_score"] > 0
+
+
+async def test_condition_codes_are_returned_raw_for_the_ui_to_map(
+    client, tokens
+):
+    """The API ships signal codes; no plain-English label crosses the
+    wire. That is deliberate — conditions_library.template_text is
+    per-case ("...for ${cdt_code} on tooth #${tooth}") and cannot label
+    an aggregate — so the owner-facing mapping lives in the frontend
+    (utils/portfolioCauses.ts) and this asserts the contract it maps
+    against has not quietly changed shape.
+    """
+    body = await portfolio(client, tokens, "dso_owner")
+    for row in body["top_denial_reasons"]:
+        assert row["condition_code"].isupper(), row
+        assert "_" in row["condition_code"], row
+        assert "label" not in row, "the API started labelling; the UI map is now a duplicate"

@@ -1709,11 +1709,31 @@ _PROC_NAMES = {
     "D0274": "Bitewings", "D4341": "Scaling", "D2391": "Filling",
 }
 
-_PAYER_NAMES = {
-    "delta_dental": "Delta Dental PPO", "cigna": "Cigna DPPO",
-    "metlife": "MetLife PDP", "aetna": "Aetna DMO",
-    "humana": "Humana DPO", "guardian": "Guardian DPO",
-}
+# ─────────────────────────────────────────────────────────────────────
+# Payer display names, read from `dental`.payers at startup.
+#
+# ⚠ THIS WAS A HARDCODED DICT AND THREE OF ITS SIX KEYS WERE WRONG.
+# It said "aetna", "humana", "guardian"; the corpus uses aetna_dmo,
+# humana_dpo, guardian_dpo. _payer_name() fell through to the raw id
+# for all three, and the DSO portfolio's payer table rendered
+# "aetna_dmo" and "guardian_dpo" to a practice owner — a machine
+# identifier on a screen whose whole premise is that an owner never
+# reads one.
+#
+# Same failure as TENANT_NAMES in api/auth.py, found the same way, and
+# fixed the same way: the table is the source, cached once, because it
+# is six rows that change when a payer is onboarded.
+# ─────────────────────────────────────────────────────────────────────
+_PAYER_NAMES: dict[str, str] = {}
+
+
+async def load_payer_directory(sim_pool) -> int:
+    """Fill the payer-name cache. Called by main's lifespan."""
+    rows = await fetch_with_tenant(
+        sim_pool, DEFAULT_TENANT, "SELECT payer_id, name FROM payers")
+    _PAYER_NAMES.clear()
+    _PAYER_NAMES.update({r["payer_id"]: r["name"] for r in rows})
+    return len(_PAYER_NAMES)
 
 
 def _procedure_summary(codes: list[str]) -> str:
@@ -1722,7 +1742,19 @@ def _procedure_summary(codes: list[str]) -> str:
 
 
 def _payer_name(payer_id: str | None) -> str:
-    return _PAYER_NAMES.get(payer_id or "", payer_id or "Unknown plan")
+    """A payer's name, never its id.
+
+    The fallback de-underscores and title-cases rather than returning
+    the raw id, so a payer onboarded between restarts reads as
+    "Aetna Dmo" instead of "aetna_dmo". Ugly is recoverable; a machine
+    identifier in front of a customer is not.
+    """
+    if not payer_id:
+        return "Unknown plan"
+    known = _PAYER_NAMES.get(payer_id)
+    if known:
+        return known
+    return payer_id.replace("_", " ").title()
 
 
 @router.get("/checkin/dates")
