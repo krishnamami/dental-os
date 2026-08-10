@@ -100,8 +100,20 @@ def resolve_appeal_viability(context: Any, rules: dict, *, today: date = None) -
     code = resp.denial_reason_code
     category, appealable, why = _category(code)
 
-    # Deadline
-    deadline = as_date(resp.appeal_deadline)
+    # ── Deadline: from the DENIAL, not from the fixture ─────────────
+    #
+    # payer_responses.appeal_deadline is simulator fixture data. On B01
+    # it says 2026-10-05 while the denial the practice actually
+    # received says 2026-07-22 — derived as denied_at + the payer's
+    # 60-day window. The appeals tab rendered the derived one and this
+    # resolver rendered the fixture, so the same case showed two
+    # deadlines eight weeks apart on one screen.
+    #
+    # denial_event is the record of what happened. It wins, and the
+    # fixture is only a fallback for a pre-D with no denial on file.
+    denial = getattr(context, "denial_event", None) or {}
+    deadline = as_date(denial.get("appeal_deadline")) or as_date(
+        resp.appeal_deadline)
     days_remaining = None if deadline is None else (deadline - today).days
     if deadline is None:
         missing.append("appeal_deadline")
@@ -226,7 +238,8 @@ def resolve_appeal_viability(context: Any, rules: dict, *, today: date = None) -
         "narrative_present": narrative,
         "is_bundling_case": is_bundling,
         "data_source": (
-            "payer_responses.decision/denial_reason_code/appeal_deadline + "
+            "denial_events.appeal_deadline (fixture fallback: "
+            "payer_responses) + payer_responses.decision/denial_reason_code + "
             "pend_checklist + clinical_evidence + bundling_rules catalogue"
         ),
         "missing_inputs": missing,

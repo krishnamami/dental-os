@@ -254,7 +254,7 @@ flowchart TD
 
     DSO[dso_portfolio_manager<br/>WAVE 5 · recommend · low · dso_manager<br/>aggregate only — never blocks a case]
 
-    FI -.any FRAUD_* signal.-> STOPF[fraud_block_stops_submission]
+    FI -.any INTEGRITY_* signal.-> STOPF[integrity_block_stops_submission]
     PC -.PROVIDER_OIG_EXCLUDED.-> STOPP[provider_exclusion_stops_submission]
 ```
 

@@ -11,10 +11,10 @@ what it means. That is why fraud_integrity is human_approval and why
 every signal carries the two values it compared.
 
 Signals, per decisions.yaml fraud_integrity.signals_emitted:
-  FRAUD_PHANTOM_PROCEDURE  billed procedure the chart cannot support
-  FRAUD_SURFACE_CONFLICT   billed surface disagrees with the radiograph
-  FRAUD_FREQUENCY_GAMING   procedure lands just inside a frequency limit
-  FRAUD_WAIVED_COPAY       submitted fee exactly equals the allowed amount
+  INTEGRITY_CODE_NOT_DOCUMENTED  billed procedure the chart cannot support
+  INTEGRITY_SURFACE_MISMATCH   billed surface disagrees with the radiograph
+  INTEGRITY_FREQUENCY_PROXIMITY   procedure lands just inside a frequency limit
+  INTEGRITY_FEE_EQUALS_ALLOWED       submitted fee exactly equals the allowed amount
   BILLING_UNBILLED_PROCEDURE  the chart documents work not on the claim
 
 ⚠ FRAUD_UPCODING IS NO LONGER EMITTED, and the reason matters.
@@ -105,14 +105,14 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
         undocumented = [c for c in billed_codes if c not in note_codes]
         for code in undocumented:
             signals.append(_signal(
-                "FRAUD_PHANTOM_PROCEDURE",
+                "INTEGRITY_CODE_NOT_DOCUMENTED",
                 code,
                 f"{code} is billed but does not appear in the clinical note "
                 f"({note_codes}). Either the note is incomplete or the code is.",
                 "high",
             ))
 
-    # ── FRAUD_PHANTOM_PROCEDURE (clinical criteria) ──────────────────
+    # ── INTEGRITY_CODE_NOT_DOCUMENTED (clinical criteria) ──────────────────
     # Osseous surgery billed against a chart that cannot support it.
     if perio is not None:
         pocket_max = as_float(evidence_field(perio, "pocket_depth_max"))
@@ -131,7 +131,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
                 continue
             if pocket_max < need_mm or sites < need_sites:
                 signals.append(_signal(
-                    "FRAUD_PHANTOM_PROCEDURE",
+                    "INTEGRITY_CODE_NOT_DOCUMENTED",
                     proc.cdt_code,
                     f"{proc.cdt_code} billed, but the perio chart shows a max "
                     f"pocket depth of {pocket_max}mm across {int(sites)} site(s) "
@@ -142,7 +142,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
     elif any(p.cdt_code in PERIO_SURGICAL_CODES for p in procedures):
         missing.append("perio_chart")
 
-    # ── FRAUD_SURFACE_CONFLICT ───────────────────────────────────────
+    # ── INTEGRITY_SURFACE_MISMATCH ───────────────────────────────────────
     if xray is not None:
         xray_surface = evidence_field(xray, "tooth_surface")
         if xray_surface:
@@ -152,7 +152,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
                     continue
                 if set(str(billed_surface).upper()) != set(str(xray_surface).upper()):
                     signals.append(_signal(
-                        "FRAUD_SURFACE_CONFLICT",
+                        "INTEGRITY_SURFACE_MISMATCH",
                         proc.cdt_code,
                         f"Billed surface {billed_surface} on tooth "
                         f"#{proc.tooth_number} but the radiograph reads "
@@ -160,7 +160,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
                         "medium",
                     ))
 
-    # ── FRAUD_WAIVED_COPAY ───────────────────────────────────────────
+    # ── INTEGRITY_FEE_EQUALS_ALLOWED ───────────────────────────────────────────
     # Submitted fee exactly equal to the allowed amount means the
     # patient portion nets to zero — a routine write-off of coinsurance
     # is a compliance issue regardless of intent.
@@ -171,7 +171,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
             continue
         if abs(fee - allowed) < 0.005:
             signals.append(_signal(
-                "FRAUD_WAIVED_COPAY",
+                "INTEGRITY_FEE_EQUALS_ALLOWED",
                 proc.cdt_code,
                 f"Submitted fee ${fee:,.2f} exactly equals the allowed amount "
                 f"${allowed:,.2f} on {proc.cdt_code}. The patient portion nets "
@@ -179,7 +179,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
                 "medium",
             ))
 
-    # ── FRAUD_FREQUENCY_GAMING ───────────────────────────────────────
+    # ── INTEGRITY_FREQUENCY_PROXIMITY ───────────────────────────────────────
     # Delegated to frequency_resolver, which owns the prior-date lookup.
     # It currently cannot fire: dental-simulator has no prior treatment
     # dates at all, so "just inside the limit" is not computable.
@@ -188,7 +188,7 @@ def resolve_upcoding(context: Any, rules: dict) -> dict:
         for v in freq.get("frequency_violations", []):
             if v.get("near_limit"):
                 signals.append(_signal(
-                    "FRAUD_FREQUENCY_GAMING",
+                    "INTEGRITY_FREQUENCY_PROXIMITY",
                     v["cdt_code"],
                     f"{v['cdt_code']} last treated {v['days_since_last']} days ago "
                     f"against a {v['days_required']}-day limit — inside the "

@@ -215,7 +215,13 @@ async def main() -> None:
                          submission_id, denied_at, denial_reason,
                          denial_reason_code, denied_amount, appeal_deadline,
                          appeal_viable, appeal_probability, notes)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,65,$11)
+                    -- appeal_probability NULL, not 65. Seeding a
+                    -- number put the same bundling constant on a
+                    -- frequency denial and a waiting-period denial.
+                    -- There is nothing to derive a per-type rate from;
+                    -- the aggregate overturn rate is the real number
+                    -- and it is computed, not stored.
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,NULL,$11)
                     RETURNING denial_id
                     """,
                     TENANT, c["pred"], corpus[c["pred"]]["patient"], PAYER,

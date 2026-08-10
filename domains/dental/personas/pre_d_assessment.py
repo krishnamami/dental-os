@@ -13,7 +13,7 @@ record, "what else is missing" is not the next question.
 
 signals_emitted in decisions.yaml is a CLOSED list of five (RULE 7):
 
-    PRED_READY_TO_SUBMIT   PRED_CONDITIONS_OPEN   PRED_BLOCKED_FRAUD
+    PRED_READY_TO_SUBMIT   PRED_CONDITIONS_OPEN   PRED_BLOCKED_INTEGRITY
     PRED_BLOCKED_CLINICAL  PRED_BLOCKED_PROVIDER
 
 Note what is NOT in it: there is no PRED_BLOCKED_ELIGIBILITY. A hard
@@ -98,12 +98,16 @@ class PreDAssessment(DentalPersona):
 
         fraud = [
             s for s in every
-            if (s.get("signal_code") or "").startswith("FRAUD_")
+            # ⚠ THE PREFIX THAT STOPS A SUBMISSION. Renaming the
+            # integrity codes without this line moves every one of them
+            # out of the block set: the pre-D goes from BLOCKED to
+            # READY with no error and no test failure.
+            if (s.get("signal_code") or "").startswith("INTEGRITY_")
         ]
         if fraud:
             names = ", ".join(sorted({s["signal_code"] for s in fraud}))
             return [self._block(
-                "PRED_BLOCKED_FRAUD",
+                "PRED_BLOCKED_INTEGRITY",
                 f"{len(fraud)} integrity signal(s) on this pre-D ({names}). "
                 f"Billing integrity is reviewed before submission, not after "
                 f"the payer finds it.",

@@ -234,12 +234,14 @@ decisions:
     wave: 1
     signals_emitted:
       - INTEGRITY_VERIFIED
-      - FRAUD_UPCODING
-      - FRAUD_PHANTOM_PROCEDURE
-      - FRAUD_FREQUENCY_GAMING
-      - FRAUD_UNBUNDLING
-      - FRAUD_WAIVED_COPAY
-      - FRAUD_SURFACE_CONFLICT
+      # FRAUD_UPCODING removed: the check that carried the name tested
+      # the opposite condition and is now BILLING_UNBILLED_PROCEDURE.
+      # FRAUD_UNBUNDLING removed: declared, never emitted.
+      - INTEGRITY_CODE_NOT_DOCUMENTED
+      - INTEGRITY_SURFACE_MISMATCH
+      - INTEGRITY_FREQUENCY_PROXIMITY
+      - INTEGRITY_FEE_EQUALS_ALLOWED
+      - BILLING_UNBILLED_PROCEDURE
     trace_required: true
 
   # == WAVE 2 — DEPENDS ON WAVE 1 =========================
@@ -499,13 +501,13 @@ decisions:
       block_if:
         - any upstream blocked
         - PROVIDER_OIG_EXCLUDED present
-        - any FRAUD_* signal present
+        - any INTEGRITY_* signal present
     sla_seconds: 300
     wave: 4
     signals_emitted:
       - PRED_READY_TO_SUBMIT
       - PRED_CONDITIONS_OPEN
-      - PRED_BLOCKED_FRAUD
+      - PRED_BLOCKED_INTEGRITY
       - PRED_BLOCKED_CLINICAL
       - PRED_BLOCKED_PROVIDER
     trace_required: true
@@ -642,7 +644,7 @@ hard_rules:
   - no_query_without_tenant_scope           # every read SETs app.tenant_id — RLS is FORCE
   - no_citation_without_source              # every cited rule traces to a catalogue row
   - provider_exclusion_stops_submission     # OIG excluded → nothing downstream submits
-  - fraud_block_stops_submission            # any FRAUD_* block halts pre_d_assessment
+  - integrity_block_stops_submission        # any INTEGRITY_* block halts pre_d_assessment
   - upstream_block_propagates_to_dependents # contamination_guard on every dependent
   - portfolio_never_blocks_a_case           # dso_portfolio_manager is advisory only
 

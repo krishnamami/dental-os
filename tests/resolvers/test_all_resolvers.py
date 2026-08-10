@@ -805,7 +805,7 @@ class TestUpcoding:
             ],
         )
         out = resolve_upcoding(ctx, rules)
-        assert "FRAUD_PHANTOM_PROCEDURE" in out["signal_types"]
+        assert "INTEGRITY_CODE_NOT_DOCUMENTED" in out["signal_types"]
         assert out["signals"][0]["severity"] == "high"
 
     def test_waived_copay_when_fee_equals_allowed(self, rules):
@@ -816,7 +816,7 @@ class TestUpcoding:
                 "cdt_codes_noted": ["D6010"], "narrative_present": True})],
         )
         out = resolve_upcoding(ctx, rules)
-        assert "FRAUD_WAIVED_COPAY" in out["signal_types"]
+        assert "INTEGRITY_FEE_EQUALS_ALLOWED" in out["signal_types"]
 
     def test_surface_conflict(self, rules):
         ctx = make_context(
@@ -828,7 +828,7 @@ class TestUpcoding:
             ],
         )
         out = resolve_upcoding(ctx, rules)
-        assert "FRAUD_SURFACE_CONFLICT" in out["signal_types"]
+        assert "INTEGRITY_SURFACE_MISMATCH" in out["signal_types"]
 
     def test_no_note_reports_missing_not_clean(self, rules):
         ctx = make_context(procedures=[proc("D6010", fee=2800.0, allowed=1985.0)],

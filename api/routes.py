@@ -301,7 +301,9 @@ async def _readiness_flags(
     #
     # The simulator computes it as "no FRAUD_* code in
     # pred_states.open_conditions" — and open_conditions has never
-    # contained one: zero rows across the corpus. Integrity findings
+    # contained one: zero rows across the corpus. Since the rename it
+    # cannot ever match, because no code starts with FRAUD_ any more.
+    # This reconcile is now the only thing that computes the flag. Integrity findings
     # live in the persona bundle instead, so the flag read true on a
     # case showing two of them, which is the readiness badge and the
     # conditions list contradicting each other on one screen.
@@ -325,7 +327,7 @@ async def _readiness_flags(
                 for sig in _json(row["all_signals"], [])
                 if isinstance(sig, dict)
             }
-            if any(str(c).startswith("FRAUD_") for c in codes if c):
+            if any(str(c).startswith("INTEGRITY_") for c in codes if c):
                 flags["no_fraud_signals"] = False
         except Exception as exc:  # noqa: BLE001 — never 500 the bundle
             logger.warning("integrity reconcile failed for %s: %s",
@@ -2896,7 +2898,7 @@ _BUCKET_PREFIXES = (
     ("ELIG_", PAYER_FRICTION),
     ("ELIGIBILITY_", PAYER_FRICTION),
     ("APPEAL_", PAYER_FRICTION),
-    ("FRAUD_", INTEGRITY_PROVIDER),
+    ("INTEGRITY_", INTEGRITY_PROVIDER),
     ("INTEGRITY_", INTEGRITY_PROVIDER),
     ("PROVIDER_", INTEGRITY_PROVIDER),
 )

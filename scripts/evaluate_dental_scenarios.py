@@ -71,7 +71,7 @@ EXPECTED: dict[str, dict] = {
     },
     "PRED-SIM-DA-F02": {
         "decision": "denied",
-        "must_have": ["FRAUD_PHANTOM_PROCEDURE"],
+        "must_have": ["INTEGRITY_CODE_NOT_DOCUMENTED"],
     },
     "PRED-SIM-DA-U01": {
         "decision": "approved",

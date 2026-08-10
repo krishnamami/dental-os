@@ -125,7 +125,7 @@ APPEAL_DECISIONS = ("denied", "pended")
 # change a signal or gate a persona — it is a label on the row so a
 # reviewer can filter decision_outputs without re-parsing signals JSONB.
 BLOCK_CODES = frozenset({
-    "PRED_BLOCKED_FRAUD", "PRED_BLOCKED_CLINICAL", "PRED_BLOCKED_PROVIDER",
+    "PRED_BLOCKED_INTEGRITY", "PRED_BLOCKED_CLINICAL", "PRED_BLOCKED_PROVIDER",
     "PROVIDER_OIG_EXCLUDED", "ELIG_COVERAGE_INACTIVE",
     "ELIG_IMPLANTS_NOT_COVERED",
 })

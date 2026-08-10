@@ -290,7 +290,7 @@ class TestFraudIntegrity:
                 ev("PERIO_CHART", {"pocket_depth_max": 3.0, "sites_gte_5mm": 0}),
             ])
         out = FraudIntegrity().run(c)
-        s = by_code(out, "FRAUD_PHANTOM_PROCEDURE")
+        s = by_code(out, "INTEGRITY_CODE_NOT_DOCUMENTED")
         assert s["mode"] == "human_approval"
 
     def test_waived_copay(self, rules):
@@ -299,7 +299,7 @@ class TestFraudIntegrity:
             clinical_evidence=[ev("CLINICAL_NOTE",
                                   {"cdt_codes_noted": ["D6010"]})])
         out = FraudIntegrity().run(c)
-        assert by_code(out, "FRAUD_WAIVED_COPAY")["mode"] == "human_approval"
+        assert by_code(out, "INTEGRITY_FEE_EQUALS_ALLOWED")["mode"] == "human_approval"
 
     def test_clinical_contradiction_is_reported(self, rules):
         c = ctx_with_rules(
@@ -309,7 +309,7 @@ class TestFraudIntegrity:
             contradicts_count=1, confirms_count=1,
             contradicts_fields=["bone_loss_mm"])
         out = FraudIntegrity().run(c)
-        assert "FRAUD_SURFACE_CONFLICT" in codes(out)
+        assert "INTEGRITY_SURFACE_MISMATCH" in codes(out)
         assert "INTEGRITY_VERIFIED" not in codes(out)
 
     def test_bundling_contradiction_is_not_an_integrity_signal(self, rules):
@@ -644,8 +644,12 @@ class TestAppealSpecialist:
         assert AppealSpecialist().run(c) == []
 
     def test_deadline_passed_short_circuits(self, rules):
+        # The deadline now comes off the DENIAL, not the fixture — so
+        # the past date has to be on the denial_event for this to test
+        # what it says it tests.
         c = ctx_with_rules(
-            rules, decision="denied", denial_event=DENIED_EVENT,
+            rules, decision="denied",
+            denial_event={**DENIED_EVENT, "appeal_deadline": "2020-01-01"},
             procedures=[proc("D2750")],
             payer_response=PayerResponse(decision="denied",
                                          denial_reason_code="D.4.1",

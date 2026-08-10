@@ -43,11 +43,13 @@ SIGNAL_MODES = {
     # the claim bills for. Nobody is over-charged, so it does not hold
     # a submission — it is money the practice is leaving behind.
     "BILLING_UNBILLED_PROCEDURE": "recommend",
-    "FRAUD_PHANTOM_PROCEDURE": "human_approval",
-    "FRAUD_WAIVED_COPAY": "human_approval",
-    "FRAUD_UNBUNDLING": "human_approval",
-    "FRAUD_FREQUENCY_GAMING": "recommend",
-    "FRAUD_SURFACE_CONFLICT": "recommend",
+    "INTEGRITY_CODE_NOT_DOCUMENTED": "human_approval",
+    "INTEGRITY_FEE_EQUALS_ALLOWED": "human_approval",
+    # FRAUD_UNBUNDLING is gone. It was declared here and in
+    # decisions.yaml and emitted by nothing — a signal that cannot fire
+    # is worse than no signal, because it reads as coverage that exists.
+    "INTEGRITY_FREQUENCY_PROXIMITY": "recommend",
+    "INTEGRITY_SURFACE_MISMATCH": "recommend",
 }
 
 
@@ -94,7 +96,7 @@ class FraudIntegrity(DentalPersona):
                   if f not in COVERAGE_DOMAIN_FIELDS]
         if contradicts and fields:
             signals.append(self.make_signal(
-                "FRAUD_SURFACE_CONFLICT",
+                "INTEGRITY_SURFACE_MISMATCH",
                 f"Clinical sources disagree on "
                 f"{', '.join(sorted(fields))} — {contradicts} contradicting "
                 f"edge(s) in the evidence graph.",
