@@ -21,6 +21,7 @@ CURRENT bundle, via persona_bundles.is_current.
 """
 from __future__ import annotations
 
+import re
 import json
 import logging
 from datetime import date, datetime, time as dtime
@@ -29,6 +30,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from core.documents import (
+    URL_TTL_SECONDS,
+    filename_for,
+    presign,
+)
 from core.dates import (
     day_window,
     local_today,
@@ -43,6 +49,7 @@ from api.auth import (
     require_clinician,
     require_clinician_cap,
     require_document_chase,
+    require_document_read,
     require_engine_feedback,
     require_handoff_sender,
     require_patient_contact,
@@ -1102,6 +1109,25 @@ async def get_conditions(
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _enclosure(value: str) -> str:
+    """A document named the way a payer's reviewer would name it.
+
+    ⚠ DEFENSIVE ON PURPOSE. The resolver now emits document types,
+    but persona_bundles written before that change still hold s3 keys in
+    supporting_evidence, and this letter is rendered from whatever the
+    stored bundle says. Without this, every historical appeal keeps
+    printing `suwanee_smiles/DA-A01/DA-A01_CLINICAL_NOTE.pdf` under
+    "Enclosed:" — an internal object path in a document that leaves
+    the building, and a map of the store to anyone who reads it.
+    """
+    tail = value.rsplit("/", 1)[-1]
+    if tail.lower().endswith(".pdf"):
+        tail = tail[:-4]
+    # Keys carry the scenario id as a prefix: DA-A01_CLINICAL_NOTE.
+    tail = re.sub(r"^[A-Z]{2}-[A-Z]\d{2}_", "", tail)
+    return tail.replace("_", " ").title()
+
+
 def build_appeal_letter(context: Any, viability: dict) -> Optional[str]:
     """Assemble a DRAFT appeal from catalogue rows only.
 
@@ -1134,7 +1160,7 @@ def build_appeal_letter(context: Any, viability: dict) -> Optional[str]:
     if citation:
         lines += ["", f"Policy reference: {citation}"]
     if evidence:
-        lines += ["", "Enclosed:"] + [f"  - {e}" for e in evidence]
+        lines += ["", "Enclosed:"] + [f"  - {_enclosure(e)}" for e in evidence]
     if viability.get("missing_evidence"):
         lines += [
             "",
@@ -1196,7 +1222,8 @@ async def get_appeal(
     evidence = [
         EvidenceItem(
             document_type=e.document_type,
-            s3_key=e.s3_key,
+            evidence_id=e.evidence_id,
+            has_document=bool(e.s3_key),
             description=(
                 f"{e.document_type.replace('_', ' ').title()} "
                 f"({e.extraction_method})"
@@ -3310,6 +3337,76 @@ def _draft_narrative(
     return " ".join(sentences[:4]), None
 
 
+@router.get("/decisions/{pred_request_id}/documents/{evidence_id}")
+async def get_document_url(
+    pred_request_id: str,
+    evidence_id: str,
+    request: Request,
+    claims=Depends(require_document_read),
+) -> dict:
+    """A short-lived link to one clinical document.
+
+    ⚠ THE CALLER NAMES A RECORD, NEVER A KEY. There is deliberately no
+    parameter anywhere in this API that accepts an s3_key from a
+    client. The reason is in core/documents.py, and briefly: the keys
+    are formulaic, so an endpoint that signs a supplied key is a read
+    primitive over 427 objects; and a presigned URL is a bearer token
+    that answers to whoever holds it, so signing an attacker-chosen key
+    hands over a document with no further check.
+
+    Here the key is read out of the row that authorised the request —
+    the same row, in the same tenant-scoped query. There is no path
+    through this function where the key came from the caller.
+
+    ── THE THREE CHECKS, IN ORDER ────────────────────────────────────
+    1. ROLE. require_document_read: dentist, revenue_ops, accord_admin.
+       A dso_owner is refused here exactly as he is refused a chart.
+    2. TENANT, on the pre-D. assert_tenant_allowed 404s rather than
+       403s, so the id space cannot be walked as an oracle.
+    3. TENANT AGAIN, on the document. The row is fetched with
+       app.tenant_id bound AND pred_request_id in the WHERE clause, so
+       an evidence_id belonging to another practice — or to another
+       pre-D in this one — matches nothing and 404s. Step 2 alone would
+       not catch a foreign evidence_id posted against an owned pre-D.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    sim, _ = _pools(request)
+
+    rows = await fetch_with_tenant(
+        sim, tenant,
+        # Both ids in the WHERE clause, not just the evidence_id. RLS
+        # already confines this to the tenant; naming the pre-D as well
+        # is what stops one practice's document being fetched through
+        # another of its own pre-Ds.
+        "SELECT evidence_id, document_type, s3_key "
+        "FROM clinical_evidence "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 AND evidence_id = $3",
+        tenant, pred_request_id, evidence_id,
+    )
+    if not rows:
+        raise HTTPException(404, "Not found")
+
+    doc = rows[0]
+    if not doc["s3_key"]:
+        # A real record with no file behind it — 111 of the 271
+        # evidence rows are structured payloads rather than documents.
+        # 404 would say "no such record", which is not true.
+        raise HTTPException(
+            409,
+            f"{doc['document_type']} is a structured payload on this "
+            f"pre-D, not a stored document. There is no file to open.",
+        )
+
+    filename = filename_for(doc["s3_key"])
+    return {
+        "url": presign(doc["s3_key"], filename=filename),
+        "filename": filename,
+        "document_type": doc["document_type"],
+        "expires_in": URL_TTL_SECONDS,
+    }
+
+
 @router.get("/decisions/{pred_request_id}/clinical")
 async def clinical_view(
     pred_request_id: str,
@@ -3904,8 +4001,8 @@ async def appeal_evidence(
     # ── What the chart holds ────────────────────────────────────────
     docs = await fetch_with_tenant(
         sim, tenant,
-        "SELECT document_type, document_category, confidence_score, "
-        "       s3_key, received_at FROM clinical_evidence "
+        "SELECT evidence_id, document_type, document_category, "
+        "       confidence_score, s3_key, received_at FROM clinical_evidence "
         "WHERE pred_request_id = $1 ORDER BY document_type",
         pred_request_id,
     )
@@ -3918,7 +4015,9 @@ async def appeal_evidence(
             "present": True,
             "detail": None,
             "confidence": _f(d["confidence_score"]),
-            "s3_key": d["s3_key"],
+            # The id, never the key — see EvidenceItem in schemas.py.
+            "evidence_id": d["evidence_id"],
+            "has_document": bool(d["s3_key"]),
             "recorded_at": _iso(d["received_at"]),
             "recorded_by": None,
         }
@@ -3968,7 +4067,8 @@ async def appeal_evidence(
             "detail": j["justification"],
             "signal_code": j["signal_code"],
             "confidence": None,
-            "s3_key": None,
+            "evidence_id": None,
+            "has_document": False,
             "recorded_at": _iso(when),
             "recorded_by": who,
             "author_role": j["author_role"],
@@ -4000,7 +4100,8 @@ async def appeal_evidence(
             "present": True,
             "detail": nrow["narrative_text"],
             "confidence": None,
-            "s3_key": None,
+            "evidence_id": None,
+            "has_document": False,
             "recorded_at": _iso(when),
             "recorded_by": who,
         })
@@ -4028,7 +4129,8 @@ async def appeal_evidence(
             "present": True,
             "detail": at["statement"],
             "confidence": None,
-            "s3_key": None,
+            "evidence_id": None,
+            "has_document": False,
             "recorded_at": _iso(when),
             "recorded_by": who,
         })
@@ -4057,7 +4159,8 @@ async def appeal_evidence(
             "present": False,
             "detail": None,
             "confidence": None,
-            "s3_key": None,
+            "evidence_id": None,
+            "has_document": False,
             "recorded_at": None,
             "recorded_by": None,
         }

@@ -130,9 +130,19 @@ def resolve_appeal_viability(context: Any, rules: dict, *, today: date = None) -
     bone_loss = as_float((xray.extracted_fields or {}).get("bone_loss_mm")) if xray else None
     narrative = bool((note.extracted_fields or {}).get("narrative_present")) if note else False
 
-    supporting = [e.s3_key for e in getattr(context, "clinical_evidence", [])
-                  if e.s3_key and e.document_type in
-                  ("XRAY_PA", "XRAY_PAN", "CBCT_REPORT", "PERIO_CHART", "CLINICAL_NOTE")]
+    # ⚠ DOCUMENT TYPES, NOT s3 KEYS. This list is rendered under
+    # "Enclosed:" in the appeal letter a biller sends to a payer, and it
+    # used to print the bucket path —
+    #     - suwanee_smiles/DA-A01/DA-A01_CLINICAL_NOTE.pdf
+    # which tells the payer nothing, and tells anyone who reads the
+    # letter our object layout. The keys are formulaic, so that is a map
+    # of the store.
+    supporting = [
+        e.document_type.replace("_", " ").title()
+        for e in getattr(context, "clinical_evidence", [])
+        if e.s3_key and e.document_type in
+        ("XRAY_PA", "XRAY_PAN", "CBCT_REPORT", "PERIO_CHART", "CLINICAL_NOTE")
+    ]
 
     # Bundling: detected from the pend checklist / open conditions and
     # the catalogue rule, since no denial code carries it.

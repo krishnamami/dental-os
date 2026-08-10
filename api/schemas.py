@@ -149,7 +149,18 @@ class ConditionsResponse(BaseModel):
 
 class EvidenceItem(BaseModel):
     document_type: str
-    s3_key: Optional[str] = None
+    # ⚠ NO s3_key. It used to be here, and EvidenceTimeline printed it
+    # on screen as the caption under "PA X-ray" — an internal object
+    # path shown to a clinician, under a heading that promised a
+    # document nobody could open.
+    #
+    # The id is what a caller needs: GET
+    # /decisions/{pred}/documents/{evidence_id} resolves the key
+    # server-side. Shipping the key as well would put a guessable
+    # bucket path in every response body, browser cache and log for no
+    # gain, since no client is permitted to send one back.
+    evidence_id: Optional[str] = None
+    has_document: bool = False
     description: Optional[str] = None
     confidence: Optional[float] = None
 

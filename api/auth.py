@@ -328,6 +328,27 @@ require_document_chase = _capability(
 )
 
 
+# Opening a patient's clinical document — a radiograph, a perio chart,
+# a clinical note. The narrowest set that has a reason to.
+#
+# The dentist reads the chart. Billing assembles the appeal packet out
+# of the same documents and has to see what is in it.
+#
+# ⚠ dso_owner IS DELIBERATELY OUT, and it is the same line drawn on
+# per-pre-D access last session: an owner is entitled to know Tampa
+# denies at 20%, and is not thereby entitled to read a Tampa patient's
+# radiograph. Ownership widened the PORTFOLIO and nothing else.
+#
+# front_desk and tx_coord are out too, but for a duller reason — no
+# screen of theirs names a document, so admitting them would widen the
+# boundary ahead of any need.
+require_document_read = _capability(
+    "require_document_read",
+    ("dentist", "revenue_ops"),
+    "This role cannot open a patient's clinical documents",
+)
+
+
 async def require_clinician(claims=Depends(get_claims)) -> dict:
     """Only a clinician may write to the clinical record.
 
