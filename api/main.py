@@ -82,6 +82,13 @@ async def lifespan(app: FastAPI):
     # with no Request to hand. Wired here so there is exactly one place
     # the pool is created.
     auth_module.os_pool = app.state.os_pool
+    # The practice directory, read once from `dental`.tenants. It used
+    # to be three hardcoded dicts in api/auth.py that had drifted from
+    # the table — see the comment there. A login stamps the practice
+    # name and address onto the token, so this has to be loaded before
+    # the first request, not lazily on the first miss.
+    known = await auth_module.load_tenant_directory(app.state.simulator_pool)
+    logger.info("tenant directory loaded — %d practices", known)
     logger.info("pools open — tenant=%s", app.state.tenant_id)
     try:
         yield

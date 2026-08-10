@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict owrlHLpgvUv2DkBpHO5OrGPba8knUPigLGgCkGceJMqlMnfMxrikwTYjfGxAiIj
 
 -- Dumped from database version 15.8
 -- Dumped by pg_dump version 15.17
@@ -19,7 +18,7 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: authenticate_user(text); Type: FUNCTION; Schema: public; Owner: -
+-- Name: authenticate_user(text); Type: FUNCTION; Schema: public; Owner: dental_auth
 --
 
 CREATE FUNCTION public.authenticate_user(p_email text) RETURNS TABLE(user_id text, email text, name text, role text, tenant_id text, password_hash text, active boolean)
@@ -34,8 +33,10 @@ CREATE FUNCTION public.authenticate_user(p_email text) RETURNS TABLE(user_id tex
 $$;
 
 
+ALTER FUNCTION public.authenticate_user(p_email text) OWNER TO dental_auth;
+
 --
--- Name: get_user_by_id(text); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_user_by_id(text); Type: FUNCTION; Schema: public; Owner: dental_auth
 --
 
 CREATE FUNCTION public.get_user_by_id(p_user_id text) RETURNS TABLE(user_id text, email text, name text, role text, tenant_id text)
@@ -49,8 +50,10 @@ CREATE FUNCTION public.get_user_by_id(p_user_id text) RETURNS TABLE(user_id text
 $$;
 
 
+ALTER FUNCTION public.get_user_by_id(p_user_id text) OWNER TO dental_auth;
+
 --
--- Name: list_active_users(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: list_active_users(); Type: FUNCTION; Schema: public; Owner: dental_auth
 --
 
 CREATE FUNCTION public.list_active_users() RETURNS TABLE(user_id text, email text, name text, role text, tenant_id text)
@@ -64,12 +67,35 @@ CREATE FUNCTION public.list_active_users() RETURNS TABLE(user_id text, email tex
 $$;
 
 
+ALTER FUNCTION public.list_active_users() OWNER TO dental_auth;
+
+--
+-- Name: tenants_owned_by(text); Type: FUNCTION; Schema: public; Owner: dental_auth
+--
+
+CREATE FUNCTION public.tenants_owned_by(p_user_id text) RETURNS TABLE(tenant_id text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+    SELECT o.tenant_id
+    FROM tenant_ownership o
+    JOIN users u ON u.user_id = o.user_id
+    -- A deactivated account owns nothing. Deactivating is how a person
+    -- is removed, and it must not leave their practices readable.
+    WHERE o.user_id = p_user_id
+      AND u.active
+    ORDER BY o.tenant_id
+$$;
+
+
+ALTER FUNCTION public.tenants_owned_by(p_user_id text) OWNER TO dental_auth;
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- Name: appeal_events; Type: TABLE; Schema: public; Owner: -
+-- Name: appeal_events; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.appeal_events (
@@ -94,22 +120,24 @@ CREATE TABLE public.appeal_events (
 ALTER TABLE ONLY public.appeal_events FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.appeal_events OWNER TO dental_admin;
+
 --
--- Name: COLUMN appeal_events.predicted_viable; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN appeal_events.predicted_viable; Type: COMMENT; Schema: public; Owner: dental_admin
 --
 
 COMMENT ON COLUMN public.appeal_events.predicted_viable IS 'The engine''s verdict at the moment of filing. NULL = not recorded.';
 
 
 --
--- Name: COLUMN appeal_events.predicted_probability; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN appeal_events.predicted_probability; Type: COMMENT; Schema: public; Owner: dental_admin
 --
 
 COMMENT ON COLUMN public.appeal_events.predicted_probability IS 'resolve_appeal_viability success_probability, 0-1, at filing time.';
 
 
 --
--- Name: appeal_packets; Type: TABLE; Schema: public; Owner: -
+-- Name: appeal_packets; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.appeal_packets (
@@ -137,8 +165,10 @@ CREATE TABLE public.appeal_packets (
 ALTER TABLE ONLY public.appeal_packets FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.appeal_packets OWNER TO dental_admin;
+
 --
--- Name: appointments; Type: TABLE; Schema: public; Owner: -
+-- Name: appointments; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.appointments (
@@ -159,8 +189,10 @@ CREATE TABLE public.appointments (
 ALTER TABLE ONLY public.appointments FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.appointments OWNER TO dental_admin;
+
 --
--- Name: checkin_events; Type: TABLE; Schema: public; Owner: -
+-- Name: checkin_events; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.checkin_events (
@@ -177,8 +209,10 @@ CREATE TABLE public.checkin_events (
 ALTER TABLE ONLY public.checkin_events FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.checkin_events OWNER TO dental_admin;
+
 --
--- Name: clinical_attestations; Type: TABLE; Schema: public; Owner: -
+-- Name: clinical_attestations; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.clinical_attestations (
@@ -195,8 +229,10 @@ CREATE TABLE public.clinical_attestations (
 ALTER TABLE ONLY public.clinical_attestations FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.clinical_attestations OWNER TO dental_admin;
+
 --
--- Name: clinical_handoffs; Type: TABLE; Schema: public; Owner: -
+-- Name: clinical_handoffs; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.clinical_handoffs (
@@ -215,8 +251,10 @@ CREATE TABLE public.clinical_handoffs (
 ALTER TABLE ONLY public.clinical_handoffs FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.clinical_handoffs OWNER TO dental_admin;
+
 --
--- Name: clinical_justifications; Type: TABLE; Schema: public; Owner: -
+-- Name: clinical_justifications; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.clinical_justifications (
@@ -233,8 +271,10 @@ CREATE TABLE public.clinical_justifications (
 ALTER TABLE ONLY public.clinical_justifications FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.clinical_justifications OWNER TO dental_admin;
+
 --
--- Name: clinical_narratives; Type: TABLE; Schema: public; Owner: -
+-- Name: clinical_narratives; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.clinical_narratives (
@@ -251,8 +291,10 @@ CREATE TABLE public.clinical_narratives (
 ALTER TABLE ONLY public.clinical_narratives FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.clinical_narratives OWNER TO dental_admin;
+
 --
--- Name: decision_outputs; Type: TABLE; Schema: public; Owner: -
+-- Name: decision_outputs; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.decision_outputs (
@@ -282,15 +324,17 @@ CREATE TABLE public.decision_outputs (
 ALTER TABLE ONLY public.decision_outputs FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.decision_outputs OWNER TO dental_admin;
+
 --
--- Name: CONSTRAINT decision_outputs_mode_chk ON decision_outputs; Type: COMMENT; Schema: public; Owner: -
+-- Name: CONSTRAINT decision_outputs_mode_chk ON decision_outputs; Type: COMMENT; Schema: public; Owner: dental_admin
 --
 
 COMMENT ON CONSTRAINT decision_outputs_mode_chk ON public.decision_outputs IS 'No auto_execute. decisions.yaml has no automate_if clause and no auto_execute mode; recommend is the ceiling. AI decides nothing.';
 
 
 --
--- Name: denial_events; Type: TABLE; Schema: public; Owner: -
+-- Name: denial_events; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.denial_events (
@@ -313,8 +357,10 @@ CREATE TABLE public.denial_events (
 ALTER TABLE ONLY public.denial_events FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.denial_events OWNER TO dental_admin;
+
 --
--- Name: document_requests; Type: TABLE; Schema: public; Owner: -
+-- Name: document_requests; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.document_requests (
@@ -334,8 +380,10 @@ CREATE TABLE public.document_requests (
 ALTER TABLE ONLY public.document_requests FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.document_requests OWNER TO dental_admin;
+
 --
--- Name: persona_bundles; Type: TABLE; Schema: public; Owner: -
+-- Name: persona_bundles; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.persona_bundles (
@@ -355,15 +403,17 @@ CREATE TABLE public.persona_bundles (
 ALTER TABLE ONLY public.persona_bundles FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.persona_bundles OWNER TO dental_admin;
+
 --
--- Name: COLUMN persona_bundles.rules_snapshot; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN persona_bundles.rules_snapshot; Type: COMMENT; Schema: public; Owner: dental_admin
 --
 
 COMMENT ON COLUMN public.persona_bundles.rules_snapshot IS 'The catalogue rules as resolved at decision time. Without this a replay would re-resolve against today''s catalogue and could reach a different answer than the one a human signed off on.';
 
 
 --
--- Name: provider_feedback; Type: TABLE; Schema: public; Owner: -
+-- Name: provider_feedback; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.provider_feedback (
@@ -384,15 +434,17 @@ CREATE TABLE public.provider_feedback (
 ALTER TABLE ONLY public.provider_feedback FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.provider_feedback OWNER TO dental_admin;
+
 --
--- Name: CONSTRAINT provider_feedback_role_chk ON provider_feedback; Type: COMMENT; Schema: public; Owner: -
+-- Name: CONSTRAINT provider_feedback_role_chk ON provider_feedback; Type: COMMENT; Schema: public; Owner: dental_admin
 --
 
 COMMENT ON CONSTRAINT provider_feedback_role_chk ON public.provider_feedback IS 'The four owner_team values in decisions.yaml. A role, never a named individual â€” this table is about which desk overrode the recommendation, not who.';
 
 
 --
--- Name: submission_events; Type: TABLE; Schema: public; Owner: -
+-- Name: submission_events; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.submission_events (
@@ -414,8 +466,26 @@ CREATE TABLE public.submission_events (
 ALTER TABLE ONLY public.submission_events FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.submission_events OWNER TO dental_admin;
+
 --
--- Name: users; Type: TABLE; Schema: public; Owner: -
+-- Name: tenant_ownership; Type: TABLE; Schema: public; Owner: dental_admin
+--
+
+CREATE TABLE public.tenant_ownership (
+    ownership_id text DEFAULT (gen_random_uuid())::text NOT NULL,
+    user_id text NOT NULL,
+    tenant_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+ALTER TABLE ONLY public.tenant_ownership FORCE ROW LEVEL SECURITY;
+
+
+ALTER TABLE public.tenant_ownership OWNER TO dental_admin;
+
+--
+-- Name: users; Type: TABLE; Schema: public; Owner: dental_admin
 --
 
 CREATE TABLE public.users (
@@ -433,8 +503,10 @@ CREATE TABLE public.users (
 ALTER TABLE ONLY public.users FORCE ROW LEVEL SECURITY;
 
 
+ALTER TABLE public.users OWNER TO dental_admin;
+
 --
--- Data for Name: appeal_events; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: appeal_events; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.appeal_events (appeal_id, tenant_id, pred_request_id, denial_id, patient_name, payer_id, filed_by, filed_at, appeal_type, status, resolved_at, recovered_amount, notes, predicted_viable, predicted_probability) FROM stdin;
@@ -445,7 +517,7 @@ COPY public.appeal_events (appeal_id, tenant_id, pred_request_id, denial_id, pat
 
 
 --
--- Data for Name: appeal_packets; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: appeal_packets; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.appeal_packets (packet_id, pred_request_id, tenant_id, payer_id, denial_reason_code, viability_score, success_probability, appeal_letter_text, evidence_list, citations, appeal_deadline, days_remaining, approved_by, generated_at, submitted_at, outcome) FROM stdin;
@@ -453,7 +525,7 @@ COPY public.appeal_packets (packet_id, pred_request_id, tenant_id, payer_id, den
 
 
 --
--- Data for Name: appointments; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: appointments; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.appointments (appointment_id, tenant_id, pred_request_id, patient_name, appointment_date, appointment_time, procedure_summary, provider_npi, status, pms_source, pms_appointment_id, created_at) FROM stdin;
@@ -514,7 +586,7 @@ aafb39ad-e4eb-443a-9ebb-d773c36ca86a	suwanee_smiles	PRED-SIM-DA-B04	Carlos River
 
 
 --
--- Data for Name: checkin_events; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: checkin_events; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.checkin_events (event_id, pred_request_id, tenant_id, patient_name, checked_in_by, checked_in_at, checkin_day, notes) FROM stdin;
@@ -527,7 +599,7 @@ a09b8e04-85c3-4630-92df-c38ec181b48e	PRED-SIM-DA-B04	suwanee_smiles	Carlos River
 
 
 --
--- Data for Name: clinical_attestations; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: clinical_attestations; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.clinical_attestations (attestation_id, tenant_id, pred_request_id, attested_by, attested_at, narrative_text, statement, submission_id) FROM stdin;
@@ -537,7 +609,7 @@ COPY public.clinical_attestations (attestation_id, tenant_id, pred_request_id, a
 
 
 --
--- Data for Name: clinical_handoffs; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: clinical_handoffs; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.clinical_handoffs (handoff_id, tenant_id, pred_request_id, to_role, from_user, message, created_at, read_at, read_by, kind) FROM stdin;
@@ -547,7 +619,7 @@ b8140b5d-11ec-44b0-a57c-d541bc2b8803	suwanee_smiles	PRED-SIM-DA-B04	dentist	abfe
 
 
 --
--- Data for Name: clinical_justifications; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: clinical_justifications; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.clinical_justifications (justification_id, tenant_id, pred_request_id, signal_code, justification, justified_by, created_at, updated_at) FROM stdin;
@@ -555,7 +627,7 @@ COPY public.clinical_justifications (justification_id, tenant_id, pred_request_i
 
 
 --
--- Data for Name: clinical_narratives; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: clinical_narratives; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.clinical_narratives (narrative_id, tenant_id, pred_request_id, narrative_text, source, written_by, created_at, updated_at) FROM stdin;
@@ -564,7 +636,7 @@ COPY public.clinical_narratives (narrative_id, tenant_id, pred_request_id, narra
 
 
 --
--- Data for Name: denial_events; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: denial_events; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.denial_events (denial_id, tenant_id, pred_request_id, patient_name, payer_id, denied_at, denial_reason, denial_reason_code, denied_amount, appeal_deadline, appeal_viable, appeal_probability, notes, submission_id) FROM stdin;
@@ -575,7 +647,7 @@ fa28ed91-2f36-4d23-847c-1301dfed3d99	suwanee_smiles	PRED-SIM-DA-B05	Ashley Thomp
 
 
 --
--- Data for Name: document_requests; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: document_requests; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.document_requests (request_id, tenant_id, pred_request_id, document_type, signal_code, requested_from, requested_by, note, status, requested_at, resolved_at) FROM stdin;
@@ -583,7 +655,7 @@ COPY public.document_requests (request_id, tenant_id, pred_request_id, document_
 
 
 --
--- Data for Name: provider_feedback; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: provider_feedback; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.provider_feedback (feedback_id, pred_request_id, tenant_id, decision_id, signal_code, feedback_type, notes, submitted_by, submitted_at, expires_at) FROM stdin;
@@ -602,7 +674,7 @@ aff492ba-ef20-4733-85e2-225fb961218f	PRED-SIM-DA-A01	suwanee_smiles	coverage_ana
 
 
 --
--- Data for Name: submission_events; Type: TABLE DATA; Schema: public; Owner: -
+-- Data for Name: submission_events; Type: TABLE DATA; Schema: public; Owner: dental_admin
 --
 
 COPY public.submission_events (submission_id, tenant_id, pred_request_id, patient_name, payer_id, payer_name, submitted_by, submitted_at, submission_method, submission_ref, expected_response_days, status, notes) FROM stdin;
@@ -613,7 +685,7 @@ ef0506a5-ab6d-4f22-8fce-836c364c48fc	suwanee_smiles	PRED-SIM-DA-B05	Ashley Thomp
 
 
 --
--- Name: appeal_events appeal_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: appeal_events appeal_events_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.appeal_events
@@ -621,7 +693,7 @@ ALTER TABLE ONLY public.appeal_events
 
 
 --
--- Name: appeal_packets appeal_packets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: appeal_packets appeal_packets_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.appeal_packets
@@ -629,7 +701,7 @@ ALTER TABLE ONLY public.appeal_packets
 
 
 --
--- Name: appointments appointments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: appointments appointments_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.appointments
@@ -637,7 +709,7 @@ ALTER TABLE ONLY public.appointments
 
 
 --
--- Name: checkin_events checkin_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: checkin_events checkin_events_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.checkin_events
@@ -645,7 +717,7 @@ ALTER TABLE ONLY public.checkin_events
 
 
 --
--- Name: clinical_attestations clinical_attestations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: clinical_attestations clinical_attestations_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.clinical_attestations
@@ -653,7 +725,7 @@ ALTER TABLE ONLY public.clinical_attestations
 
 
 --
--- Name: clinical_handoffs clinical_handoffs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: clinical_handoffs clinical_handoffs_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.clinical_handoffs
@@ -661,7 +733,7 @@ ALTER TABLE ONLY public.clinical_handoffs
 
 
 --
--- Name: clinical_justifications clinical_justifications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: clinical_justifications clinical_justifications_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.clinical_justifications
@@ -669,7 +741,7 @@ ALTER TABLE ONLY public.clinical_justifications
 
 
 --
--- Name: clinical_narratives clinical_narratives_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: clinical_narratives clinical_narratives_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.clinical_narratives
@@ -677,7 +749,7 @@ ALTER TABLE ONLY public.clinical_narratives
 
 
 --
--- Name: decision_outputs decision_outputs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: decision_outputs decision_outputs_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.decision_outputs
@@ -685,7 +757,7 @@ ALTER TABLE ONLY public.decision_outputs
 
 
 --
--- Name: denial_events denial_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: denial_events denial_events_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.denial_events
@@ -693,7 +765,7 @@ ALTER TABLE ONLY public.denial_events
 
 
 --
--- Name: document_requests document_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: document_requests document_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.document_requests
@@ -701,7 +773,7 @@ ALTER TABLE ONLY public.document_requests
 
 
 --
--- Name: persona_bundles persona_bundles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: persona_bundles persona_bundles_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.persona_bundles
@@ -709,7 +781,7 @@ ALTER TABLE ONLY public.persona_bundles
 
 
 --
--- Name: provider_feedback provider_feedback_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: provider_feedback provider_feedback_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.provider_feedback
@@ -717,7 +789,7 @@ ALTER TABLE ONLY public.provider_feedback
 
 
 --
--- Name: submission_events submission_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: submission_events submission_events_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.submission_events
@@ -725,7 +797,23 @@ ALTER TABLE ONLY public.submission_events
 
 
 --
--- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: tenant_ownership tenant_ownership_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
+--
+
+ALTER TABLE ONLY public.tenant_ownership
+    ADD CONSTRAINT tenant_ownership_pkey PRIMARY KEY (ownership_id);
+
+
+--
+-- Name: tenant_ownership tenant_ownership_unique; Type: CONSTRAINT; Schema: public; Owner: dental_admin
+--
+
+ALTER TABLE ONLY public.tenant_ownership
+    ADD CONSTRAINT tenant_ownership_unique UNIQUE (user_id, tenant_id);
+
+
+--
+-- Name: users users_email_key; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.users
@@ -733,7 +821,7 @@ ALTER TABLE ONLY public.users
 
 
 --
--- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.users
@@ -741,175 +829,182 @@ ALTER TABLE ONLY public.users
 
 
 --
--- Name: appeal_events_tenant_date; Type: INDEX; Schema: public; Owner: -
+-- Name: appeal_events_tenant_date; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX appeal_events_tenant_date ON public.appeal_events USING btree (tenant_id, filed_at);
 
 
 --
--- Name: appeal_events_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: appeal_events_unique; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX appeal_events_unique ON public.appeal_events USING btree (tenant_id, pred_request_id);
 
 
 --
--- Name: appointments_one_per_pred_per_day; Type: INDEX; Schema: public; Owner: -
+-- Name: appointments_one_per_pred_per_day; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX appointments_one_per_pred_per_day ON public.appointments USING btree (tenant_id, pred_request_id, appointment_date);
 
 
 --
--- Name: appointments_pms_id; Type: INDEX; Schema: public; Owner: -
+-- Name: appointments_pms_id; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX appointments_pms_id ON public.appointments USING btree (pms_source, pms_appointment_id) WHERE (pms_appointment_id IS NOT NULL);
 
 
 --
--- Name: checkin_events_once_per_day; Type: INDEX; Schema: public; Owner: -
+-- Name: checkin_events_once_per_day; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX checkin_events_once_per_day ON public.checkin_events USING btree (tenant_id, pred_request_id, checkin_day);
 
 
 --
--- Name: checkin_events_tenant_date; Type: INDEX; Schema: public; Owner: -
+-- Name: checkin_events_tenant_date; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX checkin_events_tenant_date ON public.checkin_events USING btree (tenant_id, checked_in_at);
 
 
 --
--- Name: clinical_attestations_one_per_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_attestations_one_per_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX clinical_attestations_one_per_pred ON public.clinical_attestations USING btree (tenant_id, pred_request_id);
 
 
 --
--- Name: clinical_attestations_tenant_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_attestations_tenant_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX clinical_attestations_tenant_pred ON public.clinical_attestations USING btree (tenant_id, pred_request_id, attested_at DESC);
 
 
 --
--- Name: clinical_handoffs_one_per_kind; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_handoffs_one_per_kind; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX clinical_handoffs_one_per_kind ON public.clinical_handoffs USING btree (tenant_id, pred_request_id, to_role, kind);
 
 
 --
--- Name: clinical_handoffs_unread; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_handoffs_unread; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX clinical_handoffs_unread ON public.clinical_handoffs USING btree (tenant_id, to_role, pred_request_id) WHERE (read_at IS NULL);
 
 
 --
--- Name: clinical_justifications_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_justifications_unique; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX clinical_justifications_unique ON public.clinical_justifications USING btree (tenant_id, pred_request_id, signal_code);
 
 
 --
--- Name: clinical_narratives_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: clinical_narratives_unique; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX clinical_narratives_unique ON public.clinical_narratives USING btree (tenant_id, pred_request_id);
 
 
 --
--- Name: denial_events_tenant_date; Type: INDEX; Schema: public; Owner: -
+-- Name: denial_events_tenant_date; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX denial_events_tenant_date ON public.denial_events USING btree (tenant_id, denied_at);
 
 
 --
--- Name: denial_events_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: denial_events_unique; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX denial_events_unique ON public.denial_events USING btree (tenant_id, pred_request_id);
 
 
 --
--- Name: document_requests_tenant_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: document_requests_tenant_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX document_requests_tenant_pred ON public.document_requests USING btree (tenant_id, pred_request_id, status);
 
 
 --
--- Name: idx_appeal_packets_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_appeal_packets_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_appeal_packets_pred ON public.appeal_packets USING btree (pred_request_id, tenant_id);
 
 
 --
--- Name: idx_decision_outputs_decision; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_decision_outputs_decision; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_decision_outputs_decision ON public.decision_outputs USING btree (decision_id, tenant_id, created_at DESC);
 
 
 --
--- Name: idx_decision_outputs_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_decision_outputs_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_decision_outputs_pred ON public.decision_outputs USING btree (pred_request_id, tenant_id);
 
 
 --
--- Name: idx_persona_bundles_current; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_bundles_current; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_persona_bundles_current ON public.persona_bundles USING btree (pred_request_id, tenant_id) WHERE is_current;
 
 
 --
--- Name: idx_persona_bundles_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_persona_bundles_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_persona_bundles_pred ON public.persona_bundles USING btree (pred_request_id, tenant_id);
 
 
 --
--- Name: idx_provider_feedback_pred; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_provider_feedback_pred; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_provider_feedback_pred ON public.provider_feedback USING btree (pred_request_id, tenant_id);
 
 
 --
--- Name: idx_provider_feedback_signal; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_provider_feedback_signal; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX idx_provider_feedback_signal ON public.provider_feedback USING btree (signal_code, tenant_id);
 
 
 --
--- Name: submission_events_tenant_date; Type: INDEX; Schema: public; Owner: -
+-- Name: submission_events_tenant_date; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE INDEX submission_events_tenant_date ON public.submission_events USING btree (tenant_id, submitted_at);
 
 
 --
--- Name: submission_events_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: submission_events_unique; Type: INDEX; Schema: public; Owner: dental_admin
 --
 
 CREATE UNIQUE INDEX submission_events_unique ON public.submission_events USING btree (tenant_id, pred_request_id);
 
 
 --
--- Name: appeal_events appeal_events_denial_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: tenant_ownership_user; Type: INDEX; Schema: public; Owner: dental_admin
+--
+
+CREATE INDEX tenant_ownership_user ON public.tenant_ownership USING btree (user_id);
+
+
+--
+-- Name: appeal_events appeal_events_denial_fk; Type: FK CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.appeal_events
@@ -917,7 +1012,7 @@ ALTER TABLE ONLY public.appeal_events
 
 
 --
--- Name: denial_events denial_events_submission_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: denial_events denial_events_submission_fk; Type: FK CONSTRAINT; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE ONLY public.denial_events
@@ -925,203 +1020,377 @@ ALTER TABLE ONLY public.denial_events
 
 
 --
--- Name: appeal_events; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: tenant_ownership tenant_ownership_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: dental_admin
+--
+
+ALTER TABLE ONLY public.tenant_ownership
+    ADD CONSTRAINT tenant_ownership_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id) ON DELETE CASCADE;
+
+
+--
+-- Name: appeal_events; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.appeal_events ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: appeal_packets; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: appeal_packets; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.appeal_packets ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: appeal_events appeal_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: appeal_events appeal_tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY appeal_tenant_isolation ON public.appeal_events USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: appointments; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: appointments; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: appointments appointments_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: appointments appointments_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY appointments_tenant ON public.appointments USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: checkin_events; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: checkin_events; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.checkin_events ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: checkin_events checkin_events_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: checkin_events checkin_events_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY checkin_events_tenant ON public.checkin_events USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: clinical_attestations; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: clinical_attestations; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.clinical_attestations ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: clinical_attestations clinical_attestations_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: clinical_attestations clinical_attestations_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY clinical_attestations_tenant ON public.clinical_attestations USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: clinical_handoffs; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: clinical_handoffs; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.clinical_handoffs ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: clinical_handoffs clinical_handoffs_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: clinical_handoffs clinical_handoffs_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY clinical_handoffs_tenant ON public.clinical_handoffs USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: clinical_justifications; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: clinical_justifications; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.clinical_justifications ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: clinical_justifications clinical_justifications_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: clinical_justifications clinical_justifications_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY clinical_justifications_tenant ON public.clinical_justifications USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: clinical_narratives; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: clinical_narratives; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.clinical_narratives ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: clinical_narratives clinical_narratives_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: clinical_narratives clinical_narratives_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY clinical_narratives_tenant ON public.clinical_narratives USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: decision_outputs; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: decision_outputs; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.decision_outputs ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: denial_events; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: denial_events; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.denial_events ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: denial_events denial_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: denial_events denial_tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY denial_tenant_isolation ON public.denial_events USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: document_requests; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: document_requests; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.document_requests ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: document_requests document_requests_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: document_requests document_requests_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY document_requests_tenant ON public.document_requests USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: persona_bundles; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: persona_bundles; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.persona_bundles ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: provider_feedback; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: provider_feedback; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.provider_feedback ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: submission_events; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: submission_events; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.submission_events ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: submission_events submission_tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: submission_events submission_tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY submission_tenant_isolation ON public.submission_events USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: appeal_packets tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: appeal_packets tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY tenant_isolation ON public.appeal_packets USING (((tenant_id)::text = current_setting('app.tenant_id'::text, true))) WITH CHECK (((tenant_id)::text = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: decision_outputs tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: decision_outputs tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY tenant_isolation ON public.decision_outputs USING (((tenant_id)::text = current_setting('app.tenant_id'::text, true))) WITH CHECK (((tenant_id)::text = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: persona_bundles tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: persona_bundles tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY tenant_isolation ON public.persona_bundles USING (((tenant_id)::text = current_setting('app.tenant_id'::text, true))) WITH CHECK (((tenant_id)::text = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: provider_feedback tenant_isolation; Type: POLICY; Schema: public; Owner: -
+-- Name: provider_feedback tenant_isolation; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY tenant_isolation ON public.provider_feedback USING (((tenant_id)::text = current_setting('app.tenant_id'::text, true))) WITH CHECK (((tenant_id)::text = current_setting('app.tenant_id'::text, true)));
 
 
 --
--- Name: users; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: tenant_ownership; Type: ROW SECURITY; Schema: public; Owner: dental_admin
+--
+
+ALTER TABLE public.tenant_ownership ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: tenant_ownership tenant_ownership_tenant; Type: POLICY; Schema: public; Owner: dental_admin
+--
+
+CREATE POLICY tenant_ownership_tenant ON public.tenant_ownership USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
+
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: public; Owner: dental_admin
 --
 
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: users users_tenant; Type: POLICY; Schema: public; Owner: -
+-- Name: users users_tenant; Type: POLICY; Schema: public; Owner: dental_admin
 --
 
 CREATE POLICY users_tenant ON public.users USING ((tenant_id = current_setting('app.tenant_id'::text, true))) WITH CHECK ((tenant_id = current_setting('app.tenant_id'::text, true)));
 
 
 --
+-- Name: SCHEMA public; Type: ACL; Schema: -; Owner: pg_database_owner
+--
+
+GRANT USAGE ON SCHEMA public TO dental_app;
+GRANT USAGE ON SCHEMA public TO dental_auth;
+
+
+--
+-- Name: FUNCTION authenticate_user(p_email text); Type: ACL; Schema: public; Owner: dental_auth
+--
+
+REVOKE ALL ON FUNCTION public.authenticate_user(p_email text) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.authenticate_user(p_email text) TO dental_app;
+
+
+--
+-- Name: FUNCTION get_user_by_id(p_user_id text); Type: ACL; Schema: public; Owner: dental_auth
+--
+
+REVOKE ALL ON FUNCTION public.get_user_by_id(p_user_id text) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.get_user_by_id(p_user_id text) TO dental_app;
+
+
+--
+-- Name: FUNCTION list_active_users(); Type: ACL; Schema: public; Owner: dental_auth
+--
+
+REVOKE ALL ON FUNCTION public.list_active_users() FROM PUBLIC;
+GRANT ALL ON FUNCTION public.list_active_users() TO dental_app;
+
+
+--
+-- Name: FUNCTION tenants_owned_by(p_user_id text); Type: ACL; Schema: public; Owner: dental_auth
+--
+
+REVOKE ALL ON FUNCTION public.tenants_owned_by(p_user_id text) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.tenants_owned_by(p_user_id text) TO dental_app;
+
+
+--
+-- Name: TABLE appeal_events; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.appeal_events TO dental_app;
+
+
+--
+-- Name: TABLE appeal_packets; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.appeal_packets TO dental_app;
+
+
+--
+-- Name: TABLE appointments; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.appointments TO dental_app;
+
+
+--
+-- Name: TABLE checkin_events; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.checkin_events TO dental_app;
+
+
+--
+-- Name: TABLE clinical_attestations; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT ON TABLE public.clinical_attestations TO dental_app;
+
+
+--
+-- Name: TABLE clinical_handoffs; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.clinical_handoffs TO dental_app;
+
+
+--
+-- Name: TABLE clinical_justifications; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.clinical_justifications TO dental_app;
+
+
+--
+-- Name: TABLE clinical_narratives; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.clinical_narratives TO dental_app;
+
+
+--
+-- Name: TABLE decision_outputs; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.decision_outputs TO dental_app;
+
+
+--
+-- Name: TABLE denial_events; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.denial_events TO dental_app;
+
+
+--
+-- Name: TABLE document_requests; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.document_requests TO dental_app;
+
+
+--
+-- Name: TABLE persona_bundles; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.persona_bundles TO dental_app;
+
+
+--
+-- Name: TABLE provider_feedback; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.provider_feedback TO dental_app;
+
+
+--
+-- Name: TABLE submission_events; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.submission_events TO dental_app;
+
+
+--
+-- Name: TABLE tenant_ownership; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.tenant_ownership TO dental_app;
+GRANT SELECT ON TABLE public.tenant_ownership TO dental_auth;
+
+
+--
+-- Name: TABLE users; Type: ACL; Schema: public; Owner: dental_admin
+--
+
+GRANT SELECT,INSERT,UPDATE ON TABLE public.users TO dental_app;
+GRANT SELECT ON TABLE public.users TO dental_auth;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict owrlHLpgvUv2DkBpHO5OrGPba8knUPigLGgCkGceJMqlMnfMxrikwTYjfGxAiIj
 

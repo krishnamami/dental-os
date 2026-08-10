@@ -61,26 +61,53 @@ PASSWORD = "demo2026"
 # Prefix for the pristine copies reset_events rewinds to.
 _SNAP = "_fixture_"
 
-# Suwanee is the tenant with the corpus. Tampa exists so cross-tenant
-# refusal is testable with a real second identity rather than a forged
-# claim — a hand-made token would test the helper, not the wiring.
-TEST_USERS: tuple[tuple[str, str, str, str | None], ...] = (
-    ("sarah@suwaneesmiles.com", "Sarah R.", "front_desk", "suwanee_smiles"),
-    ("tc@suwaneesmiles.com", "Jennifer M.", "tx_coord", "suwanee_smiles"),
-    ("billing@suwaneesmiles.com", "Kim B.", "revenue_ops", "suwanee_smiles"),
-    ("drchinta@suwaneesmiles.com", "Dr. Chinta", "dentist", "suwanee_smiles"),
-    ("drshyam@suwaneesmiles.com", "Dr. Shyam", "dso_owner", "suwanee_smiles"),
-    ("admin@accorddental.io", "Accord Admin", "accord_admin", None),
-    ("billing@tampabaysmiles.com", "Kim T.", "revenue_ops", "tampa_smiles"),
-    ("drrodriguez@tampabaysmiles.com", "Dr. Rodriguez", "dentist",
-     "tampa_smiles"),
-    # A SECOND owner, at the other practice. /portfolio/summary narrows
-    # to the caller's tenant, and a narrowing that returns the right
-    # answer by accident of row order passes with only one owner to try
-    # it with. Mirrors production, where Dr. Shyam is two unrelated
-    # rows — one per practice, nothing linking them.
-    ("drshyam@tampabaysmiles.com", "Dr. Shyam", "dso_owner", "tampa_smiles"),
+# (fixture key, email, name, role, home tenant)
+#
+# The key is explicit rather than derived from the role, because there
+# are now three dso_owners and a role alone stopped identifying anyone.
+#
+# Suwanee is the tenant with the corpus. Tampa and Dallas exist so
+# cross-tenant refusal is testable with real second and third
+# identities — a hand-made token would test the helper, not the wiring.
+TEST_USERS: tuple[tuple[str, str, str, str, str | None], ...] = (
+    ("front_desk", "sarah@suwaneesmiles.com", "Sarah R.",
+     "front_desk", "suwanee_smiles"),
+    ("tx_coord", "tc@suwaneesmiles.com", "Jennifer M.",
+     "tx_coord", "suwanee_smiles"),
+    ("revenue_ops", "billing@suwaneesmiles.com", "Kim B.",
+     "revenue_ops", "suwanee_smiles"),
+    ("dentist", "drchinta@suwaneesmiles.com", "Dr. Chinta",
+     "dentist", "suwanee_smiles"),
+    ("accord_admin", "admin@accorddental.io", "Accord Admin",
+     "accord_admin", None),
+    ("tampa_revenue_ops", "billing@tampabaysmiles.com", "Kim T.",
+     "revenue_ops", "tampa_smiles"),
+    ("tampa_dentist", "drrodriguez@tampabaysmiles.com", "Dr. Rodriguez",
+     "dentist", "tampa_smiles"),
+
+    # ── the three owners the portfolio tests need ────────────────────
+    # TWO practices. One account — as production now is, after
+    # scripts/seed_ownership.py merged his second login away.
+    ("dso_owner", "drshyam@suwaneesmiles.com", "Dr. Shyam",
+     "dso_owner", "suwanee_smiles"),
+    # ONE practice. Proves a single-practice owner takes the same code
+    # path and is not a special case.
+    ("dallas_owner", "drreyes@dallasfamilydental.com", "Dr. Alan Reyes",
+     "dso_owner", "dallas_dental"),
+    # NONE. Deliberately granted nothing below: an owner between
+    # practices must get an empty portfolio, not a 403 and not — the
+    # real hazard — every practice in the deployment because an empty
+    # scope was read as "unscoped".
+    ("orphan_owner", "nobody@accorddental.io", "Dr. No Practice",
+     "dso_owner", "tampa_smiles"),
 )
+
+# email -> the practices they own. Mirrors production exactly; see
+# scripts/seed_ownership.py. Anyone absent owns nothing.
+TEST_OWNERSHIP: dict[str, tuple[str, ...]] = {
+    "drshyam@suwaneesmiles.com": ("suwanee_smiles", "tampa_smiles"),
+    "drreyes@dallasfamilydental.com": ("dallas_dental",),
+}
 
 # Everything a test can write, in FK order — parents first, because
 # reset_events reinserts along this list.
@@ -189,9 +216,15 @@ def database() -> None:
 
     # The dumps name these roles in policies and function bodies, so
     # they have to exist before the restore, not after.
+    # Attributes measured against RDS, not guessed — dental_auth's
+    # BYPASSRLS is what lets a SECURITY DEFINER function answer a
+    # question that has no tenant, and dental_admin having NEITHER
+    # superuser nor BYPASSRLS is why the portfolio has to iterate
+    # rather than run one cross-tenant query.
     for role, extra in ((APP_ROLE, f"LOGIN PASSWORD '{APP_PW}'"),
                         ("dental_auth", "NOLOGIN BYPASSRLS"),
-                        ("dental_admin", "NOLOGIN")):
+                        ("dental_admin", "LOGIN NOBYPASSRLS "
+                                         f"PASSWORD '{APP_PW}'")):
         _psql("postgres", f"""
             DO $$ BEGIN
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{role}')
@@ -206,15 +239,27 @@ def database() -> None:
         _psql("postgres", f"CREATE DATABASE {db}")
         for d in dumps:
             _restore(db, FIXTURES / d)
-        # --no-acl stripped the GRANTs. dental_app is still a non-owner,
-        # so every RLS policy applies to it — which is the property this
-        # suite depends on.
-        _psql(db, f"""
-            GRANT USAGE ON SCHEMA public TO {APP_ROLE};
-            GRANT SELECT, INSERT, UPDATE, DELETE
-              ON ALL TABLES IN SCHEMA public TO {APP_ROLE};
-            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE};
-            GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {APP_ROLE};""")
+        # ⚠ THE dental_os DUMP CARRIES ITS OWN OWNERS AND GRANTS, AND
+        # THIS BLOCK MUST NOT PAPER OVER THEM.
+        #
+        # It used to blanket-GRANT everything to dental_app on both
+        # databases, which made the suite structurally unable to catch a
+        # missing privilege. It didn't: migrations/012 granted
+        # tenant_ownership to dental_app and forgot dental_auth, every
+        # test passed, and production answered 500 "permission denied
+        # for table tenant_ownership" on the first portfolio read —
+        # because tenants_owned_by() runs as dental_auth, and in the
+        # test database --no-owner had quietly reassigned it to the
+        # superuser, who can read anything.
+        #
+        # dental_os is now dumped WITH owners and ACLs. The simulator
+        # still is not: it is read-only to this app and its grants
+        # reference RDS-only roles, so dental_app is granted here.
+        if db == SIM_DB:
+            _psql(db, f"""
+                GRANT USAGE ON SCHEMA public TO {APP_ROLE};
+                GRANT SELECT ON ALL TABLES IN SCHEMA public TO {APP_ROLE};
+                GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO {APP_ROLE};""")
 
     preds = _psql(SIM_DB, "SELECT count(*) FROM pred_requests")
     bundles = _psql(OS_DB, "SELECT count(*) FROM persona_bundles")
@@ -227,12 +272,21 @@ def database() -> None:
 
     # users, ours, never production's.
     pw = bcrypt.hashpw(PASSWORD.encode(), bcrypt.gensalt(rounds=4)).decode()
-    _psql(OS_DB, "TRUNCATE users")
-    for email, name, role, tenant in TEST_USERS:
+    _psql(OS_DB, "TRUNCATE users CASCADE")
+    for _key, email, name, role, tenant in TEST_USERS:
         t = f"'{tenant}'" if tenant else "NULL"
         _psql(OS_DB,
               f"INSERT INTO users (email, password_hash, name, role, tenant_id)"
               f" VALUES ('{email}', '{pw}', '{name}', '{role}', {t})")
+
+    # Ownership. Excluded from the fixture because its rows point at
+    # user_ids that only exist once the block above has run.
+    for email, owned in TEST_OWNERSHIP.items():
+        for tenant in owned:
+            _psql(OS_DB,
+                  f"INSERT INTO tenant_ownership (user_id, tenant_id) "
+                  f"SELECT user_id, '{tenant}' FROM users "
+                  f"WHERE email = '{email}'")
 
     # The pristine copy reset_events rewinds to. Taken after the users
     # exist so it is the state every test starts from.
@@ -281,8 +335,7 @@ async def tokens(client) -> dict[str, dict[str, str]]:
     the kind of thing that breaks silently.
     """
     out: dict[str, dict[str, str]] = {}
-    for email, _name, role, tenant in TEST_USERS:
-        key = role if tenant != "tampa_smiles" else f"tampa_{role}"
+    for key, email, _name, _role, _tenant in TEST_USERS:
         r = await client.post(
             "/auth/login", json={"email": email, "password": PASSWORD}
         )

@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict ruuJxZ53aiTbRkttzfHcbDv407NQvIcRoTj5NqwaaHBE8X4Y8DCpFP3rtb6Ju6g
 
 -- Dumped from database version 15.8
 -- Dumped by pg_dump version 15.17
@@ -6397,5 +6396,4 @@ CREATE POLICY providers_tenant_isolation ON public.providers USING ((tenant_id =
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ruuJxZ53aiTbRkttzfHcbDv407NQvIcRoTj5NqwaaHBE8X4Y8DCpFP3rtb6Ju6g
 

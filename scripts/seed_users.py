@@ -46,11 +46,17 @@ USERS: list[tuple[str, str, str, str | None]] = [
     ("sarah@tampabaysmiles.com", "Sarah T.", "front_desk", "tampa_smiles"),
     ("billing@tampabaysmiles.com", "Kim T.", "revenue_ops", "tampa_smiles"),
     ("drrodriguez@tampabaysmiles.com", "Dr. Maria Rodriguez", "dentist", "tampa_smiles"),
-    ("drshyam@tampabaysmiles.com", "Dr. Shyam Patel", "dso_owner", "tampa_smiles"),
+    # ⚠ NO drshyam@tampabaysmiles.com. It was merged into the Suwanee
+    # account by scripts/seed_ownership.py and deactivated; the upsert
+    # below sets active = true, so listing it here would resurrect the
+    # duplicate this deployment just finished removing. Shyam owns
+    # tampa_smiles through tenant_ownership now, not through a second
+    # login.
     ("tc@tampabaysmiles.com", "Maria C.", "tx_coord", "tampa_smiles"),
     # Dallas Family Dental — TX
     ("billing@dallasfamilydental.com", "Kim D.", "revenue_ops", "dallas_dental"),
     ("drwilson@dallasfamilydental.com", "Dr. James Wilson", "dentist", "dallas_dental"),
+    ("drreyes@dallasfamilydental.com", "Dr. Alan Reyes", "dso_owner", "dallas_dental"),
     # Accord platform — no tenant
     ("admin@accorddental.io", "Accord Admin", "accord_admin", None),
 ]

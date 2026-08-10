@@ -228,6 +228,7 @@ class DSOPortfolioManager(DentalPersona):
 
         practices: list[dict] = []
         denial_counts: dict[tuple[str, str], int] = {}
+        payer_rows: list[dict] = []
 
         for tenant in tenants:
             rows = await scoped(tenant, """
@@ -276,6 +277,31 @@ class DSOPortfolioManager(DentalPersona):
                 key = (r["condition_code"], r["tenant_id"])
                 denial_counts[key] = denial_counts.get(key, 0) + r["frequency"]
 
+            # ── Approval rate per payer, per practice ────────────────
+            # Inside the same tenant-bound transaction as everything
+            # else, which is the whole point: this replaces a hardcoded
+            # table in the frontend (PayerPerformance.tsx) that was
+            # counted by hand on 2026-08-06 and rendered THREE
+            # practices' payer data to every user regardless of who
+            # they were. Counted live, and scoped, it cannot do that.
+            #
+            # No rate is computed here. Most cells are one or two pre-Ds
+            # where a percentage is arithmetic rather than a signal, so
+            # the denominator travels with the numerator and the caller
+            # decides what is worth colouring.
+            payer_rows.extend(await scoped(tenant, """
+                SELECT pr.tenant_id,
+                       pr.payer_id,
+                       COUNT(*)                                         AS total,
+                       COUNT(*) FILTER (WHERE ps.decision = 'approved') AS approved,
+                       COUNT(*) FILTER (WHERE ps.decision = 'denied')   AS denied
+                FROM pred_requests pr
+                JOIN pred_states ps ON ps.pred_request_id = pr.pred_request_id
+                WHERE pr.tenant_id = $1
+                GROUP BY pr.tenant_id, pr.payer_id
+                ORDER BY pr.payer_id
+            """, tenant))
+
         top_denials = [
             {"condition_code": code, "tenant_id": tenant, "frequency": n}
             for (code, tenant), n in sorted(
@@ -285,5 +311,6 @@ class DSOPortfolioManager(DentalPersona):
         return {
             "tenants": practices,
             "top_denial_reasons": top_denials,
+            "payer_performance": payer_rows,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }

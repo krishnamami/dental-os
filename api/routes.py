@@ -36,7 +36,7 @@ from core.dates import (
     require_date,
 )
 from api.auth import (
-    TENANT_CONTACTS,
+    tenant_contact,
     assert_tenant_allowed,
     require_billing,
     require_claims,
@@ -1470,7 +1470,27 @@ def _f(value: Any) -> float:
 # per-tenant loop. tests/api/test_api_portfolio.py walks the WHOLE
 # response for foreign tenant_ids, so a collection missing from here
 # fails the suite rather than reaching a customer.
-_PORTFOLIO_COLLECTIONS = ("tenants", "top_denial_reasons")
+_PORTFOLIO_COLLECTIONS = ("tenants", "top_denial_reasons", "payer_performance")
+
+
+async def _tenants_owned(os_pool, user_id: str) -> list[str]:
+    """The practices this person owns, from tenant_ownership.
+
+    ⚠ THE ONE UNSCOPED READ ON THE PORTFOLIO PATH, and it returns
+    nothing but tenant ids. "Which practices do I own" cannot be
+    answered under a tenant policy, because it is the question that
+    produces the tenant — the same bootstrap `users` has at login. So
+    it goes through tenants_owned_by(), a SECURITY DEFINER function
+    owned by dental_auth (migrations/012), exactly as authenticate_user
+    does in 006.
+
+    Everything downstream of this list is read one tenant at a time
+    with app.tenant_id bound. No practice data is read unscoped.
+    """
+    async with os_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT tenant_id FROM tenants_owned_by($1)", user_id)
+    return [r["tenant_id"] for r in rows]
 
 
 @router.get("/portfolio/summary")
@@ -1513,6 +1533,13 @@ async def portfolio_summary(
     than before, not fewer — the group cut used to push a small
     practice's rows out entirely.
 
+    ── SCOPE IS OWNERSHIP ────────────────────────────────────────────
+    tenant_ownership (migrations/012), not users.tenant_id. The latter
+    is where a person WORKS; this endpoint asks what they OWN, and
+    conflating the two is why Dr. Shyam needed two logins to see two
+    practices. An owner of several gets several, an owner of one gets
+    one, an owner of none gets an empty portfolio.
+
     ── ON THE GUARD ──────────────────────────────────────────────────
     require_practice_admin, so dso_owner and accord_admin and nobody
     else. It was require_claims_or_demo, which admitted every signed-in
@@ -1537,20 +1564,45 @@ async def portfolio_summary(
         # No admin DSN configured — the read pool answers identically.
         pool, _ = _pools(request)
 
-    # ── Tenant boundary, resolved BEFORE the query ───────────────
+    # ── Scope, resolved BEFORE the query ─────────────────────────
     # accord_admin (tenant_filter -> None) sees the whole group, and
     # None is what aggregate_all_tenants reads as "every active
-    # practice". Anyone else gets a one-element list.
+    # practice".
     #
-    # A dso_owner today belongs to a single tenant_id, so "their DSO
-    # group" and "their practice" are the same thing. This is already a
-    # LIST rather than a scalar because that stops being true the moment
-    # a group membership table exists — at which point only this line
-    # changes, not the loop and not the narrowing below.
-    allowed = tenant_filter(claims)
-    visible: list[str] | None = None if allowed is None else [allowed]
+    # Everyone else is scoped by OWNERSHIP, not by users.tenant_id.
+    # That column is the practice a person works AT; it answered this
+    # question only because there was nothing better, and it made Dr.
+    # Shyam two unrelated accounts to own two locations. An owner of
+    # three practices now gets three, an owner of one gets one, and
+    # both take the same code path.
+    #
+    # ⚠ OWNING NOTHING IS AN EMPTY PORTFOLIO, NOT A 403. The guard
+    # already established this caller may ask; the honest answer to "how
+    # are my practices doing" when there are none is zero of them. A 403
+    # would say "you may not know", which is a different and untrue
+    # statement. `[]` is not None, so the loop below runs zero times
+    # rather than falling through to every practice — that distinction
+    # is the difference between an empty portfolio and a total leak.
+    # ⚠ BRANCH ON THE ROLE, NOT ON tenant_filter() RETURNING None.
+    # tenant_filter answers None for accord_admin AND for anyone whose
+    # tenant_id is NULL, and users.tenant_id is nullable. A dso_owner
+    # seeded without a practice would have taken the admin arm and been
+    # handed every tenant in the deployment. Its own docstring warns
+    # that reading None backwards fails open; this is that call site.
+    _, os_pool = _pools(request)
+    visible: list[str] | None = (
+        None if claims.get("role") == "accord_admin"
+        else await _tenants_owned(os_pool, claims.get("sub", ""))
+    )
 
     data = await DSOPortfolioManager.aggregate_all_tenants(pool, visible)
+
+    # payer_id -> display name, added here rather than joined in SQL:
+    # `payers` is a global catalogue with no tenant_id, and pulling it
+    # into the per-tenant loop would read the same six rows once per
+    # practice.
+    for row in data.get("payer_performance", []):
+        row["payer_name"] = _payer_name(row.get("payer_id"))
 
     # Belt and braces. Redundant while every collection is built inside
     # the per-tenant loop, and deliberately kept for when one is not:
@@ -1620,6 +1672,10 @@ async def portfolio_summary(
             for t in tenants
         ],
         "top_denial_reasons": data["top_denial_reasons"],
+        # One row per (practice, payer): approved / denied / total, plus
+        # the payer's display name. Counted live and scoped, replacing
+        # the hand-counted literal that used to live in the frontend.
+        "payer_performance": data["payer_performance"],
         "generated_at": data["generated_at"],
     }
 
@@ -1806,7 +1862,7 @@ async def checkin_today(
         if who:
             sender_name = who[0]["name"] or sender_name
             sender_email = who[0]["email"] or ""
-    contact = TENANT_CONTACTS.get(tenant, {})
+    contact = tenant_contact(tenant)
 
     checked = await execute_os_with_tenant(
         os_pool, tenant,
@@ -2185,7 +2241,8 @@ async def practice_settings(
     """Providers and payer mix for one practice.
 
     The name and address are NOT here — they come back on the token
-    (auth.TENANT_NAMES), so a page that already knows who is signed in
+    (auth.tenant_name, read from the tenants table), so a page that
+    already knows who is signed in
     does not need a round trip to render its own heading.
     """
     tenant = _tenant_for_admin(claims, tenant_id)

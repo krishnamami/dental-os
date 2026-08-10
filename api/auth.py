@@ -76,40 +76,88 @@ JWT_HOURS = 24 * 7
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
-TENANT_NAMES = {
-    "suwanee_smiles": "Suwanee Smiles Dental",
-    "tampa_smiles": "Tampa Bay Smiles",
-    "dallas_dental": "Dallas Family Dental",
-}
-
-TENANT_ADDRESSES = {
-    "suwanee_smiles": "3155 Peachtree Pkwy Ste 120, Suwanee GA",
-    "tampa_smiles": "4321 Bay St, Tampa FL",
-    "dallas_dental": "7890 Commerce St, Dallas TX",
-}
-
-# How a patient reaches the practice back. These end up on a sheet
-# handed to a patient and in the reply-to of a mail they receive, so
-# they are the practice's own details — never a coordinator's personal
-# line.
+# ─────────────────────────────────────────────────────────────────────
+# The practice directory — read from `dental`.tenants, once, at startup.
 #
-# Still a literal, like the two tables above, because there is no
-# tenants-with-contact-details table on either database. The moment one
-# exists, all three of these move into it.
-TENANT_CONTACTS = {
-    "suwanee_smiles": {
-        "email": "info@suwaneesmiles.com",
-        "phone": "+17704912345",
-    },
-    "tampa_smiles": {
-        "email": "info@tampabaysmiles.com",
-        "phone": "+18135559876",
-    },
-    "dallas_dental": {
-        "email": "info@dallasfamilydental.com",
-        "phone": "+12145551234",
-    },
+# ⚠ THIS USED TO BE THREE HARDCODED DICTS, AND THEY HAD DRIFTED.
+# TENANT_NAMES / TENANT_ADDRESSES were a second source of truth for
+# practice identity, and by the time anyone compared them they
+# disagreed with the table on more than formatting:
+#
+#     Dallas   dict "7890 Commerce St"     table "789 Oak Lawn Ave"
+#     Tampa    dict "4321 Bay St"          table "4321 Bay Shore Blvd"
+#     Suwanee  dict dropped the ZIP        table carried it
+#
+# Different street numbers, not a stale suite number. The address on a
+# login token is what a patient-facing sheet prints, so this was a
+# practice's own address being wrong on a document handed to a patient.
+# It also broke LocationCards.stateOf(), whose regex needs the five
+# digits the dict had dropped.
+#
+# `tenants` is the right source: it is the directory of practices, it
+# is the only simulator table with a tenant_id and RLS deliberately off,
+# and every other cross-practice read in this repo already uses it.
+#
+# Cached rather than read per request. It is three rows that change
+# when a practice is onboarded, and a login is not the moment to ask.
+# Restart to pick up a change — same as any other startup wiring.
+# ─────────────────────────────────────────────────────────────────────
+_TENANT_DIRECTORY: dict[str, dict[str, str | None]] = {}
+
+# The one field `tenants` has no column for. Kept as a literal on
+# purpose and kept SMALL, so it is obvious what is still hardcoded:
+# name, address and phone now come from the table.
+#
+# ⚠ When tenants grows an email column, delete this and read it there.
+_TENANT_EMAILS = {
+    "suwanee_smiles": "info@suwaneesmiles.com",
+    "tampa_smiles": "info@tampabaysmiles.com",
+    "dallas_dental": "info@dallasfamilydental.com",
 }
+
+
+async def load_tenant_directory(sim_pool) -> int:
+    """Fill the cache from `dental`.tenants. Called by main's lifespan.
+
+    Goes through fetch_with_tenant for its READ ONLY transaction, not
+    because tenants needs a tenant — it has no RLS — but because RULE 15
+    says dental-os never writes to a simulator table and that helper is
+    what enforces it.
+    """
+    from core.db.connection import DEFAULT_TENANT, fetch_with_tenant
+
+    rows = await fetch_with_tenant(
+        sim_pool, DEFAULT_TENANT,
+        "SELECT tenant_id, name, address, phone FROM tenants WHERE active")
+    _TENANT_DIRECTORY.clear()
+    for r in rows:
+        _TENANT_DIRECTORY[r["tenant_id"]] = {
+            "name": r["name"],
+            "address": r["address"],
+            "phone": r["phone"],
+            "email": _TENANT_EMAILS.get(r["tenant_id"]),
+        }
+    return len(_TENANT_DIRECTORY)
+
+
+def tenant_name(tenant: str | None) -> str | None:
+    return _TENANT_DIRECTORY.get(tenant or "", {}).get("name")
+
+
+def tenant_address(tenant: str | None) -> str | None:
+    return _TENANT_DIRECTORY.get(tenant or "", {}).get("address")
+
+
+def tenant_contact(tenant: str | None) -> dict[str, str | None]:
+    """Where a patient reaches the practice back.
+
+    These end up on a sheet handed to a patient and in the reply-to of
+    a mail they receive, so they are the practice's own details — never
+    a coordinator's personal line.
+    """
+    d = _TENANT_DIRECTORY.get(tenant or "", {})
+    return {"email": d.get("email"), "phone": d.get("phone")}
+
 
 # Wired by main.py's lifespan once the pool exists.
 os_pool = None
@@ -421,8 +469,8 @@ def row_to_user(row) -> UserOut:
         name=row["name"],
         role=row["role"],
         tenant_id=row["tenant_id"],
-        tenant_name=TENANT_NAMES.get(tenant),
-        tenant_address=TENANT_ADDRESSES.get(tenant),
+        tenant_name=tenant_name(tenant),
+        tenant_address=tenant_address(tenant),
     )
 
 

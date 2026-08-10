@@ -21,8 +21,9 @@ client tools, the dump runs inside that container, which can reach RDS.
       pred_audit_log     handful of pre-Ds the tests touch are kept.
 
   users                EXCLUDED DELIBERATELY. Dumping it would commit
-                       production auth rows and their bcrypt hashes.
-                       conftest creates its own six accounts instead.
+      tenant_ownership   production auth rows and their bcrypt hashes,
+                       and ownership rows point at user_ids that would
+                       then not exist. conftest creates both.
 """
 from __future__ import annotations
 
@@ -62,16 +63,37 @@ def _ssm(name: str) -> str:
     ).stdout.strip()
 
 
-def _dump(db: str, extra: list[str]) -> str:
+def _dump(db: str, extra: list[str] | None = None, *, privileges: bool = False) -> str:
+    """privileges=True keeps OWNER and GRANT statements.
+
+    ⚠ dental_os NEEDS THEM AND IT COST A PRODUCTION 500 TO LEARN.
+    --no-owner --no-acl throw away exactly the two things that decide
+    what a SECURITY DEFINER function may do. Restored without them,
+    tenants_owned_by() ends up owned by the container superuser, which
+    can read anything — so the suite proved the function worked while
+    production answered "permission denied for table tenant_ownership"
+    on the first real call. The privilege model has to be part of the
+    fixture or the fixture cannot test it.
+
+    The simulator dump keeps the flags: it is read-only to this app,
+    900 KB of it is catalogue, and its grants reference RDS-only roles.
+    """
     cmd = [
         "docker", "exec", "-e", f"PGPASSWORD={_ssm('/dental/db/password')}",
         CONTAINER, "pg_dump", "-h", RDS, "-U", "dental_admin", "-d", db,
-        "--no-owner", "--no-acl", *extra,
+        *([] if privileges else ["--no-owner", "--no-acl"]), *(extra or []),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
         raise SystemExit(f"pg_dump {db} failed:\n{r.stderr[-2000:]}")
-    return r.stdout
+    # pg_dump 15.17 wraps its output in \restrict / \unrestrict with a
+    # RANDOM token each run. Left in, every refresh reports all three
+    # fixtures as modified whether or not a byte of data moved, and a
+    # real change hides in the noise. They are a psql-side guard against
+    # a dump being replayed somewhere unexpected; nothing here needs it.
+    keep = [ln for ln in r.stdout.splitlines()
+            if not ln.startswith(("\\restrict ", "\\unrestrict "))]
+    return "\n".join(keep) + "\n"
 
 
 def _literal(v) -> str:
@@ -137,11 +159,15 @@ def main() -> int:
     print(f"  dental.sql      {len(sim)/1048576:.2f} MB")
 
     # Schema + the small tables. users excluded: see the module docstring.
-    core = _dump("dental_os", [
+    core = _dump("dental_os", privileges=True, extra=[
         "--exclude-table-data=persona_bundles",
         "--exclude-table-data=decision_outputs",
         "--exclude-table-data=pred_audit_log",
         "--exclude-table-data=users",
+        # Rows here reference users.user_id, and users is excluded — a
+        # restore would fail the foreign key. conftest grants ownership
+        # to the accounts it creates.
+        "--exclude-table-data=tenant_ownership",
     ])
     (OUT / "dental_os.sql").write_text(core, encoding="utf-8")
     print(f"  dental_os.sql   {len(core)/1048576:.2f} MB")
