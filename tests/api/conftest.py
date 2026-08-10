@@ -74,6 +74,12 @@ TEST_USERS: tuple[tuple[str, str, str, str | None], ...] = (
     ("billing@tampabaysmiles.com", "Kim T.", "revenue_ops", "tampa_smiles"),
     ("drrodriguez@tampabaysmiles.com", "Dr. Rodriguez", "dentist",
      "tampa_smiles"),
+    # A SECOND owner, at the other practice. /portfolio/summary narrows
+    # to the caller's tenant, and a narrowing that returns the right
+    # answer by accident of row order passes with only one owner to try
+    # it with. Mirrors production, where Dr. Shyam is two unrelated
+    # rows — one per practice, nothing linking them.
+    ("drshyam@tampabaysmiles.com", "Dr. Shyam", "dso_owner", "tampa_smiles"),
 )
 
 # Everything a test can write, in FK order — parents first, because

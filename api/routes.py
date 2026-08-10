@@ -1463,9 +1463,19 @@ def _f(value: Any) -> float:
     return float(value) if value is not None else 0.0
 
 
+# Every collection in the portfolio payload that carries a tenant_id.
+#
+# ⚠ ADD TO THIS LIST WHEN YOU ADD A COLLECTION. It is the second of two
+# defences and the only one that survives a query written outside the
+# per-tenant loop. tests/api/test_api_portfolio.py walks the WHOLE
+# response for foreign tenant_ids, so a collection missing from here
+# fails the suite rather than reaching a customer.
+_PORTFOLIO_COLLECTIONS = ("tenants", "top_denial_reasons")
+
+
 @router.get("/portfolio/summary")
 async def portfolio_summary(
-    request: Request, claims=Depends(require_claims_or_demo)
+    request: Request, claims=Depends(require_practice_admin)
 ) -> dict:
     """Cross-tenant analytics — every practice in the DSO group.
 
@@ -1477,6 +1487,42 @@ async def portfolio_summary(
     patient, no pre-D id, no signal. That is the line: a DSO manager is
     entitled to know Tampa denies at 20%, and is not thereby entitled to
     read a Tampa patient's chart.
+
+    ── ⚠ IT USED TO LEAK, AND HOW ────────────────────────────────────
+    The aggregate ran over every practice and the route then narrowed
+    ONE collection — `tenants` — on the way out. `top_denial_reasons`
+    went back whole, so Suwanee's owner received twenty rows of which
+    several were tagged dallas_dental, and /dso/denials rendered
+    "SUWANEE 21 | TOTAL 22". The missing 1 was another practice's.
+
+    Every SQL statement was correctly scoped the whole time; app
+    .tenant_id was set per tenant and RLS did its job. The leak was a
+    filter that covered one collection out of two, in Python, after the
+    data was already in memory.
+
+    The fix is to never hold it: the caller's tenants are resolved
+    FIRST and the loop runs over those only. There is no foreign row in
+    memory to forget to filter. Measured, the same change takes a
+    single-practice caller from 7 database round trips to 2 — the
+    directory read disappears with the loop that needed it, and
+    accord_admin still pays the full 1 + 2N.
+
+    One visible consequence: `top_denial_reasons` is a top-20 cut, and
+    it is now the top 20 of the CALLER'S practices rather than of the
+    group. A single-practice owner sees more of their own conditions
+    than before, not fewer — the group cut used to push a small
+    practice's rows out entirely.
+
+    ── ON THE GUARD ──────────────────────────────────────────────────
+    require_practice_admin, so dso_owner and accord_admin and nobody
+    else. It was require_claims_or_demo, which admitted every signed-in
+    role and an anonymous X-Demo-Mode request — a front desk has no
+    business reading practice-level revenue, and an unauthenticated
+    caller certainly does not.
+
+    require_practice_admin's own docstring warns it must not be used
+    where a caller can name a tenant. This route takes no tenant_id
+    parameter; scope comes from the token and nothing else.
 
     On the admin pool: get_admin_pool() is used because that is the
     named seam for this query, but it does NOT currently bypass RLS —
@@ -1491,24 +1537,31 @@ async def portfolio_summary(
         # No admin DSN configured — the read pool answers identically.
         pool, _ = _pools(request)
 
-    data = await DSOPortfolioManager.aggregate_all_tenants(pool)
-
-    # ── Tenant boundary ──────────────────────────────────────────
-    # This is the one endpoint that aggregates ACROSS practices, so it
-    # needs the opposite treatment to the others: instead of refusing a
-    # foreign pre-D, it narrows the result set.
+    # ── Tenant boundary, resolved BEFORE the query ───────────────
+    # accord_admin (tenant_filter -> None) sees the whole group, and
+    # None is what aggregate_all_tenants reads as "every active
+    # practice". Anyone else gets a one-element list.
     #
-    # accord_admin (tenant_filter -> None) sees the whole group. Anyone
-    # else sees exactly one row — their own practice — even though the
-    # aggregate was computed over all of them. A dso_owner today belongs
-    # to a single tenant_id, so "their DSO group" and "their practice"
-    # are the same thing; when a group spans several tenants this needs
-    # a real group membership table, not a wider filter.
+    # A dso_owner today belongs to a single tenant_id, so "their DSO
+    # group" and "their practice" are the same thing. This is already a
+    # LIST rather than a scalar because that stops being true the moment
+    # a group membership table exists — at which point only this line
+    # changes, not the loop and not the narrowing below.
     allowed = tenant_filter(claims)
-    if allowed is not None:
-        data["tenants"] = [
-            t for t in data["tenants"] if t["tenant_id"] == allowed
-        ]
+    visible: list[str] | None = None if allowed is None else [allowed]
+
+    data = await DSOPortfolioManager.aggregate_all_tenants(pool, visible)
+
+    # Belt and braces. Redundant while every collection is built inside
+    # the per-tenant loop, and deliberately kept for when one is not:
+    # a future global query would land here unscoped, and this is the
+    # line that catches it.
+    if visible is not None:
+        for key in _PORTFOLIO_COLLECTIONS:
+            data[key] = [
+                row for row in data.get(key, [])
+                if row.get("tenant_id") in visible
+            ]
     tenants = data["tenants"]
 
     total_pre_ds = sum(t["total_pre_ds"] for t in tenants)
