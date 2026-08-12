@@ -10,7 +10,7 @@ const LINKS = [
 
 export default function DemoSection() {
   return (
-    <Section id="see-it">
+    <Section>
       <Container>
         <div className="mx-auto max-w-2xl text-center">
           <Eyebrow>See it in action</Eyebrow>

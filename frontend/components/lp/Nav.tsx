@@ -68,7 +68,7 @@ const MENU: Array<{
       {
         title: "Multi-tenant",
         body: "GA, FL, TX — 6 payers, 7 states",
-        href: "#see-it",
+        href: "#products",
       },
       {
         title: "Docs",
