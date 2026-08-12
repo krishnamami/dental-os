@@ -7,3 +7,11 @@ __pycache__/
 
 # local scratch
 _chk.py
+_probe_tmp.cjs
+
+# Playwright was installed at the repo root; the Node project belongs in
+# frontend/. Anchored with a leading slash so frontend/package.json — which
+# IS tracked — keeps working.
+/node_modules/
+/package.json
+/package-lock.json
