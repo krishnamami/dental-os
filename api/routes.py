@@ -24,12 +24,13 @@ from __future__ import annotations
 import re
 import json
 import logging
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
+from core.audit.document_access import log_document_access
 from core.documents import (
     URL_TTL_SECONDS,
     filename_for,
@@ -1107,6 +1108,39 @@ async def get_conditions(
 # ─────────────────────────────────────────────────────────────────────
 # T-35 — GET /decisions/{pred_request_id}/appeal
 # ─────────────────────────────────────────────────────────────────────
+
+
+# Document types, as a person would name them. clinical_evidence has no
+# label column — the brief assumed one — and the audit log stores the
+# type, so the mapping lives here beside the only reader.
+# The document types a reviewer is expected to have opened before a
+# case is filed. Imaging, the perio chart and the clinical note — the
+# evidence a payer asks about. An insurance card is not clinical review.
+_REVIEWABLE_TYPES = (
+    "XRAY_PA", "XRAY_BW", "XRAY_PAN", "PERIO_CHART", "CLINICAL_NOTE",
+)
+
+_DOCUMENT_LABELS = {
+    "XRAY_PA": "Periapical X-ray",
+    "XRAY_BW": "Bitewing X-ray",
+    "XRAY_PAN": "Panoramic X-ray",
+    "CBCT_REPORT": "CBCT report",
+    "PERIO_CHART": "Periodontal chart",
+    "CLINICAL_NOTE": "Clinical note",
+    "INSURANCE_CARD": "Insurance card",
+    "PRED_LETTER": "Pre-determination letter",
+    "TREATMENT_PLAN": "Treatment plan",
+    "REFERRAL_LETTER": "Referral letter",
+}
+
+
+def _document_label(document_type: str | None) -> str:
+    """Never the raw code. Same degrade discipline as _payer_name."""
+    if not document_type:
+        return "Document"
+    return _DOCUMENT_LABELS.get(
+        document_type, document_type.replace("_", " ").capitalize()
+    )
 
 
 def _enclosure(value: str) -> str:
@@ -3399,11 +3433,183 @@ async def get_document_url(
         )
 
     filename = filename_for(doc["s3_key"])
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=URL_TTL_SECONDS)
+
+    # ── The access is recorded BEFORE the URL exists ─────────────
+    # Not after. If the row were written after presigning and the insert
+    # failed, the URL would already be in the caller's hands and the
+    # access permanently unlogged. Ordered this way, a failure costs a
+    # read; the other way round it costs the record.
+    #
+    # ⚠ AND IT IS NOT CAUGHT-AND-CONTINUED. A 500 here is correct: an
+    # unlogged look at a patient's radiograph is an audit failure, and
+    # this is the endpoint that made "did the clinician review the
+    # X-ray before submitting?" unanswerable.
+    _, os_pool = _pools(request)
+    try:
+        await log_document_access(
+            os_pool,
+            tenant_id=tenant,
+            pred_request_id=pred_request_id,
+            evidence_id=doc["evidence_id"],
+            document_type=doc["document_type"],
+            user_id=claims.get("sub", ""),
+            user_role=claims.get("role", ""),
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+            url_expires_at=expires_at,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any failure withholds the URL
+        logger.error(
+            "document_access_log_failed pred=%s evidence=%s: %s",
+            pred_request_id, evidence_id, exc,
+        )
+        raise HTTPException(
+            500, "Audit log failed — cannot serve document URL"
+        ) from None
+
     return {
         "url": presign(doc["s3_key"], filename=filename),
         "filename": filename,
         "document_type": doc["document_type"],
         "expires_in": URL_TTL_SECONDS,
+        "expires_at": _iso(expires_at),
+    }
+
+
+@router.get("/decisions/{pred_request_id}/document-access")
+async def document_access_history(
+    pred_request_id: str,
+    request: Request,
+    claims=Depends(require_billing),
+) -> dict:
+    """Who opened which clinical document on this case, and when.
+
+    ⚠ ROUTED UNDER /decisions, NOT /cases. The brief said
+    GET /cases/{id}/document-access; every other per-case route in this
+    API is /decisions/{id}/..., and a second namespace for the same
+    resource is how two half-populated URL spaces start.
+
+    ── THE JOIN THE BRIEF ASKED FOR CANNOT BE WRITTEN ────────────────
+    It LEFT JOINed clinical_evidence for a document_label.
+    clinical_evidence is in the `dental` database and this table is in
+    `dental_os` — no fdw, no dblink, so the JOIN does not compile — and
+    clinical_evidence has no document_label column in any case. The
+    document's type is denormalised onto the event row at write time
+    (migrations/013) and the label is derived from it here, which also
+    means the log reads back as it was written rather than as the
+    evidence row describes itself today.
+
+    ── ROLE ──────────────────────────────────────────────────────────
+    require_billing: revenue_ops and accord_admin. This answers "can we
+    defend this case", which is billing's question when a payer pushes
+    back. Deliberately NOT the dentist: a clinician reading who else
+    opened a chart is a different feature with a different argument
+    behind it, and it is not this one.
+    """
+    tenant = await _tenant_for(request, pred_request_id)
+    assert_tenant_allowed(claims, tenant)
+    _, os_pool = _pools(request)
+
+    rows = await execute_os_with_tenant(
+        os_pool, tenant,
+        """
+        SELECT access_id, evidence_id, document_type, access_type,
+               user_id, user_role, occurred_at, url_expires_at
+        FROM document_access_events
+        WHERE tenant_id = $1 AND pred_request_id = $2
+        ORDER BY occurred_at DESC
+        """,
+        tenant, pred_request_id,
+    )
+
+    # user_id is a uuid on the row; a reader needs a name. Resolved in
+    # one query rather than per row.
+    names: dict[str, str] = {}
+    ids = sorted({r["user_id"] for r in rows if r["user_id"]})
+    if ids:
+        for u in await execute_os_with_tenant(
+            os_pool, tenant,
+            "SELECT user_id, name FROM users WHERE user_id = ANY($1::text[])",
+            ids,
+        ):
+            names[u["user_id"]] = u["name"]
+
+    # ── "Was this case reviewed before it was filed?" ─────────────
+    # Computed here, not in the browser, because it spans both
+    # databases: the documents that ought to have been read are in
+    # `dental`.clinical_evidence and the moment of filing is in
+    # `dental_os`.submission_events. The frontend has one pool and no
+    # way to join them.
+    submitted = await execute_os_with_tenant(
+        os_pool, tenant,
+        "SELECT min(submitted_at) AS at FROM submission_events "
+        "WHERE tenant_id = $1 AND pred_request_id = $2",
+        tenant, pred_request_id,
+    )
+    submitted_at = submitted[0]["at"] if submitted else None
+
+    sim, _ = _pools(request)
+    required = await fetch_with_tenant(
+        sim, tenant,
+        # Only documents that exist to be opened. A required type with
+        # no file behind it is a documentation gap, not an audit gap,
+        # and conflating them would cry wolf on every incomplete case.
+        "SELECT evidence_id, document_type FROM clinical_evidence "
+        "WHERE tenant_id = $1 AND pred_request_id = $2 "
+        "  AND s3_key IS NOT NULL AND document_type = ANY($3::text[]) "
+        "ORDER BY document_type",
+        tenant, pred_request_id, list(_REVIEWABLE_TYPES),
+    )
+
+    first_read: dict[str, dict] = {}
+    for r in sorted(rows, key=lambda x: x["occurred_at"]):
+        if submitted_at is None or r["occurred_at"] <= submitted_at:
+            first_read.setdefault(r["evidence_id"], r)
+
+    review = [
+        {
+            "evidence_id": d["evidence_id"],
+            "document_type": d["document_type"],
+            "document_label": _document_label(d["document_type"]),
+            "reviewed": d["evidence_id"] in first_read,
+            "reviewed_at": _iso(first_read[d["evidence_id"]]["occurred_at"])
+            if d["evidence_id"] in first_read else None,
+            "reviewed_by": names.get(
+                (first_read.get(d["evidence_id"]) or {}).get("user_id", "")),
+        }
+        for d in required
+    ]
+
+    return {
+        "pred_request_id": pred_request_id,
+        "total_accesses": len(rows),
+        "submitted_at": _iso(submitted_at),
+        # None, not False, when the case has not been filed: "no gap
+        # yet" and "reviewed in time" are different answers and the
+        # screen says different things about them.
+        "audit_complete": (
+            all(x["reviewed"] for x in review) if review and submitted_at
+            else None
+        ),
+        "required_documents": review,
+        "events": [
+            {
+                "access_id": r["access_id"],
+                "evidence_id": r["evidence_id"],
+                "document_type": r["document_type"],
+                "document_label": _document_label(r["document_type"]),
+                "access_type": r["access_type"],
+                "user_id": r["user_id"],
+                "user_name": names.get(r["user_id"]),
+                "user_role": r["user_role"],
+                "occurred_at": _iso(r["occurred_at"]),
+                "url_expires_at": _iso(r["url_expires_at"]),
+            }
+            for r in rows
+        ],
     }
 
 
