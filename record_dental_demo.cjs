@@ -197,7 +197,10 @@ async function switchPersona(page, token, destination, greeting) {
   }, [token, TOKEN_KEY]);
 
   await go(page, destination);
-  await sleep(3000);
+  // 1200ms, not 3000: the pre-load pass has already warmed these endpoints
+  // server-side, so the page paints well inside this. waitForSelector below
+  // is the real guard — this is only to let layout settle before filming.
+  await sleep(1200);
 
   try {
     await page.waitForSelector(`text=${greeting}`, { timeout: 10000 });
@@ -237,13 +240,22 @@ async function caption(page, text) {
       document.body.appendChild(el);
     }
     el.textContent = t;
+    el.style.display = 'block';
   }, text);
 }
 
+/**
+ * Hides the overlay rather than blanking its text. Emptying textContent left
+ * the div's background and padding on screen — a small black pill sat at the
+ * bottom of every gap between captions.
+ */
 async function clearCaption(page) {
   await page.evaluate(() => {
     const el = document.getElementById('__cap__');
-    if (el) el.textContent = '';
+    if (el) {
+      el.textContent = '';
+      el.style.display = 'none';
+    }
   }).catch(() => {});
 }
 
