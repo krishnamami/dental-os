@@ -72,9 +72,15 @@ const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
+const https = require('https');
 
 const BASE = 'https://www.accorddental.io';
 const PASS = 'demo2026';
+
+// The app keeps its JWT here — confirmed by logging in and reading
+// localStorage. Not "token": using the wrong key fails silently, showing a
+// login screen in every scene instead of erroring.
+const TOKEN_KEY = 'accord_dental_token';
 
 const W = 1280, H = 720;
 const OUT_DIR = __dirname;
@@ -122,15 +128,83 @@ async function go(page, url) {
   throw lastErr;
 }
 
-async function login(page, email) {
-  await go(page, `${BASE}/login`);
-  await page.waitForSelector('input#email', { timeout: 15000 });
-  await page.fill('input#email', '');
-  await page.type('input#email', email, { delay: 30 });
-  await page.fill('input#password', '');
-  await page.type('input#password', PASS, { delay: 30 });
-  await page.click('button[type=submit]');
-  await sleep(4000);
+/**
+ * Authenticates over the API rather than the login form. POST /api/auth/login
+ * returns {token, user}; there are no cookies and nothing in sessionStorage,
+ * so the JWT in localStorage is the whole of the session.
+ *
+ * Retried on the same schedule as navigation — the connection resets hit plain
+ * https requests too, and a failed pre-fetch would kill the run before the
+ * recorder ever starts.
+ */
+function fetchTokenOnce(email) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ email, password: PASS });
+    const req = https.request({
+      hostname: 'www.accorddental.io',
+      path: '/api/auth/login',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          const token = parsed.token || parsed.access_token ||
+                        parsed.jwt || parsed.id_token;
+          if (token) resolve(token);
+          else reject(new Error('No token in response: ' +
+                                JSON.stringify(parsed).slice(0, 160)));
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function fetchToken(email) {
+  let lastErr;
+  for (let attempt = 1; attempt <= NAV_RETRIES; attempt++) {
+    try {
+      return await fetchTokenOnce(email);
+    } catch (err) {
+      lastErr = err;
+      console.log(`    token attempt ${attempt}/${NAV_RETRIES} failed for ${email}: ${err.message.slice(0, 50)}`);
+      if (attempt < NAV_RETRIES) await sleep(NAV_RETRY_DELAYS[attempt - 1]);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Swaps persona by writing the JWT straight into localStorage, then jumping to
+ * the destination. Replaces the on-camera login form, which cost ~7s per
+ * persona — about 35s of the old 111s take spent watching credentials typed in.
+ *
+ * localStorage is origin-scoped, so the page must already be on the site
+ * before the write. Every caller here follows a previous scene, so that holds.
+ */
+async function switchPersona(page, token, destination, greeting) {
+  await page.evaluate(([tok, key]) => {
+    localStorage.clear();
+    localStorage.setItem(key, tok);
+  }, [token, TOKEN_KEY]);
+
+  await go(page, destination);
+  await sleep(3000);
+
+  try {
+    await page.waitForSelector(`text=${greeting}`, { timeout: 10000 });
+    console.log(`  ✓ ${greeting}`);
+  } catch {
+    console.log(`  WARN: "${greeting}" not visible`);
+  }
 }
 
 /** True if the text is on screen within `timeout`. Warns rather than throws. */
@@ -198,19 +272,20 @@ async function clickIfExists(page, selector, wait = 2000) {
 // Warms the API for every persona so no scene films a loading skeleton. This
 // context is discarded; only server-side warmth carries into the recording.
 
-async function preload(browser) {
+async function preload(browser, tokens) {
   console.log('\nPRE-LOAD (no recording yet)');
   const ctx = await browser.newContext({ viewport: { width: W, height: H } });
   const page = await ctx.newPage();
   const ok = {};
 
+  await go(page, BASE);   // origin needed before localStorage can be written
+
   console.log('  a. sarah → /checkin');
-  await login(page, USERS.sarah);
+  await switchPersona(page, tokens.sarah, `${BASE}/checkin`, 'Good morning, Sarah');
   ok.sarah = await waitForText(page, 'Good morning, Sarah');
 
   console.log('  b. jennifer → /coverage → 2026-08-09');
-  await login(page, USERS.jennifer);
-  await waitForText(page, 'Good morning, Jennifer');
+  await switchPersona(page, tokens.jennifer, `${BASE}/coverage`, 'Good morning, Jennifer');
   await page.selectOption('select', '2026-08-09').catch(() => {});
   await sleep(3000);
   const jenTxt = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
@@ -219,15 +294,15 @@ async function preload(browser) {
   console.log(`     Linda Taylor READY + talking points: ${ok.jennifer}`);
 
   console.log('  c. drchinta → /workbench');
-  await login(page, USERS.drchinta);
+  await switchPersona(page, tokens.drchinta, `${BASE}/workbench`, 'Good morning, Dr. Chinta');
   ok.drchinta = await waitForText(page, 'James Mitchell');
 
   console.log('  d. kim → /revenue-ops');
-  await login(page, USERS.kim);
+  await switchPersona(page, tokens.kim, `${BASE}/revenue-ops`, 'Revenue operations');
   ok.kim = await waitForText(page, 'Revenue operations');
 
   console.log('  e. drshyam → /dso');
-  await login(page, USERS.drshyam);
+  await switchPersona(page, tokens.drshyam, `${BASE}/dso`, 'Suwanee Smiles Dental');
   ok.drshyam = await waitForText(page, 'Suwanee Smiles Dental');
 
   await ctx.close();
@@ -240,7 +315,7 @@ async function preload(browser) {
 
 // ── STEP 2 — record ──────────────────────────────────────────────────────
 
-async function record(browser) {
+async function record(browser, tokens) {
   fs.rmSync(VIDEO_DIR, { recursive: true, force: true });
   fs.mkdirSync(VIDEO_DIR, { recursive: true });
 
@@ -261,8 +336,7 @@ async function record(browser) {
 
   // ── SCENE 2 — Sarah / front desk (12s) ─────────────────────────────────
   console.log('[2/7] Sarah — front desk');
-  await login(page, USERS.sarah);
-  await waitForText(page, 'Good morning, Sarah');
+  await switchPersona(page, tokens.sarah, `${BASE}/checkin`, 'Good morning, Sarah');
   await caption(page,
     'Sarah is at the front desk. Linda Taylor arrives for a crown at nine thirty.');
   await sleep(4000);
@@ -275,8 +349,7 @@ async function record(browser) {
 
   // ── SCENE 3 — Jennifer / TC (18s) ──────────────────────────────────────
   console.log('[3/7] Jennifer — treatment coordinator');
-  await login(page, USERS.jennifer);
-  await waitForText(page, 'Good morning, Jennifer');
+  await switchPersona(page, tokens.jennifer, `${BASE}/coverage`, 'Good morning, Jennifer');
   await page.selectOption('select', '2026-08-09').catch(() => {});
   await sleep(3000);
   await caption(page,
@@ -301,8 +374,7 @@ async function record(browser) {
 
   // ── SCENE 4 — Dr. Chinta (14s) ─────────────────────────────────────────
   console.log('[4/7] Dr. Chinta — clinical workbench');
-  await login(page, USERS.drchinta);
-  await waitForText(page, 'Good morning, Dr. Chinta');
+  await switchPersona(page, tokens.drchinta, `${BASE}/workbench`, 'Good morning, Dr. Chinta');
   await caption(page, "Dr. Chinta opens James Mitchell's implant case.");
   await sleep(3000);
 
@@ -323,8 +395,7 @@ async function record(browser) {
 
   // ── SCENE 5 — Kim / revenue ops (14s) ──────────────────────────────────
   console.log('[5/7] Kim — revenue operations');
-  await login(page, USERS.kim);
-  await waitForText(page, 'Revenue operations');
+  await switchPersona(page, tokens.kim, `${BASE}/revenue-ops`, 'Revenue operations');
   await caption(page,
     'Kim runs revenue operations. Three cases blocked. ' +
     'Nine thousand four hundred and fifty dollars at risk.');
@@ -344,8 +415,7 @@ async function record(browser) {
 
   // ── SCENE 6 — Dr. Shyam / DSO (10s) ────────────────────────────────────
   console.log('[6/7] Dr. Shyam — DSO view');
-  await login(page, USERS.drshyam);
-  await waitForText(page, 'Suwanee Smiles Dental');
+  await switchPersona(page, tokens.drshyam, `${BASE}/dso`, 'Suwanee Smiles Dental');
   await caption(page,
     'Dr. Shyam owns two practices. Fifty-five thousand six hundred ' +
     'and fifty dollars sitting with payers right now.');
@@ -385,14 +455,24 @@ function toMp4(webm) {
 }
 
 async function main() {
+  // Tokens first: no browser needed, and a failure here should stop the run
+  // before a recorder is ever started.
+  console.log('Pre-fetching auth tokens...');
+  const tokens = {};
+  for (const [name, email] of Object.entries(USERS)) {
+    tokens[name] = await fetchToken(email);
+    console.log(`  ${name}: token fetched ✓`);
+  }
+  console.log('All tokens ready.');
+
   const browser = await chromium.launch({ headless: true });
   try {
-    const preloaded = await preload(browser);
+    const preloaded = await preload(browser, tokens);
     if (!preloaded) {
       console.log('\n  Pre-load did not confirm every persona. Recording anyway —' +
                   '\n  check the scenes above before using the take.');
     }
-    const webm = await record(browser);
+    const webm = await record(browser, tokens);
     await browser.close();
 
     toMp4(webm);
