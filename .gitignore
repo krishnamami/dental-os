@@ -15,3 +15,9 @@ _probe_tmp.cjs
 /node_modules/
 /package.json
 /package-lock.json
+
+# Recorder output — a 3MB+ binary per take, and the raw WebM scratch dir.
+/accord_dental_demo.mp4
+/accord_dental_FINAL.mp4
+/accord_dental_voiceover.mp3
+/.video_tmp/
