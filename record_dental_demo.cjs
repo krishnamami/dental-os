@@ -31,14 +31,19 @@
  * Chrome install.
  * ─────────────────────────────────────────────────────────────────────────
  *
- * Scenes (~79s):
+ * Scenes (~108s):
  *   1 Landing page        6s
- *   2 Sarah front desk   12s
- *   3 Jennifer TC        18s
- *   4 Dr. Chinta         14s
- *   5 Kim revenue ops    14s
- *   6 Dr. Shyam DSO      10s
+ *   2 Sarah front desk   12.5s
+ *   3 Jennifer TC        20.5s
+ *   4 Dr. Chinta         15.8s
+ *   5 Kim revenue ops    15.5s
+ *   6 Dr. Shyam DSO      15.1s
  *   7 Landing page        5s
+ *
+ * CAPTION PACING — holds are sized so each line lands near 2.5 words/sec
+ * (~150 wpm, conversational). Six were originally 4s against 15–19 word
+ * lines, i.e. 3.8–4.3 w/s, which no narrator reads cleanly; they now run
+ * 6–7.6s. If you edit a caption, re-check its hold: words / 2.5 = seconds.
  *
  * SCENE 2 NOTE — the check-in click writes a real checkin_events row, so it
  * only fires once per day per patient. If Linda Taylor is already checked in
@@ -351,7 +356,7 @@ async function record(browser, tokens) {
   await switchPersona(page, tokens.sarah, `${BASE}/checkin`, 'Good morning, Sarah');
   await caption(page,
     'Sarah is at the front desk. Linda Taylor arrives for a crown at nine thirty.');
-  await sleep(4000);
+  await sleep(6000);   // 15 words @ ~2.5 w/s
 
   await clickIfExists(page,
     'article:has-text("Linda Taylor") button:has-text("Check in patient")', 500);
@@ -372,7 +377,7 @@ async function record(browser, tokens) {
   await caption(page,
     'Accord has already written her talking points — what to say, ' +
     'what to warn, what to collect.');
-  await sleep(4000);
+  await sleep(7000);   // 17 words @ ~2.4 w/s
 
   await clickIfExists(page, 'button:has-text("Treatment & cost")', 500);
   await caption(page,
@@ -397,7 +402,7 @@ async function record(browser, tokens) {
   await caption(page,
     'Clinical criteria met — four point two millimeters bone loss. ' +
     'But the narrative is missing.');
-  await sleep(4000);
+  await sleep(6000);   // 15 words @ ~2.5 w/s
 
   await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
   await caption(page,
@@ -411,7 +416,7 @@ async function record(browser, tokens) {
   await caption(page,
     'Kim runs revenue operations. Three cases blocked. ' +
     'Nine thousand four hundred and fifty dollars at risk.');
-  await sleep(4000);
+  await sleep(6500);   // 16 words @ ~2.5 w/s
 
   await clickIfExists(page, 'text=Conditions', 500);
   await caption(page,
@@ -431,13 +436,13 @@ async function record(browser, tokens) {
   await caption(page,
     'Dr. Shyam owns two practices. Fifty-five thousand six hundred ' +
     'and fifty dollars sitting with payers right now.');
-  await sleep(4000);
+  await sleep(7000);   // 17 words @ ~2.4 w/s
 
   await clickIfExists(page, "text=What's holding cases up", 500);
   await caption(page,
     'Twenty-one cases missing a pre-auth. Nine missing a radiograph. ' +
     'Seven with no clinical narrative. Every cause. Every owner. Named.');
-  await sleep(5000);
+  await sleep(7600);   // 19 words @ ~2.5 w/s
   await clearCaption(page);
 
   // ── SCENE 7 — Back to landing page (5s) ────────────────────────────────
