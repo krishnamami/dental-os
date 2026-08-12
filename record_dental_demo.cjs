@@ -17,6 +17,20 @@
  *   Scene 7  — Landing page again    (6s)
  *   Total: ~89 seconds
  *
+ * RESET BEFORE EACH TAKE:
+ *   Scene 2 has Sarah check Linda Taylor in, which writes a row to
+ *   checkin_events. Once written, the button disappears and the motion cannot
+ *   be filmed again that day. Clear it first (dental_os DB, RLS needs the
+ *   tenant set):
+ *
+ *     SET app.tenant_id = 'suwanee_smiles';
+ *     DELETE FROM checkin_events
+ *      WHERE tenant_id = 'suwanee_smiles'
+ *        AND patient_name = 'Linda Taylor'
+ *        AND checkin_day = CURRENT_DATE;
+ *
+ *   Leave the Aug 9 rows alone — those are seed data.
+ *
  * SELECTOR NOTES (verified against the live site, Aug 2026):
  *   - Patient names are NOT clickable on /checkin or /coverage. Both pages
  *     render read-only <article> cards; only the status filter buttons at the
@@ -161,7 +175,21 @@ async function main() {
 
   // Hold on AT A GLANCE —
   // insurance active, 4 items flagged
-  await sleep(7000);
+  await sleep(5000);
+
+  // Sarah checks Linda Taylor in. This is the hinge of the whole demo: it
+  // moves her from WAITING to READY FOR CONSULTATION, which is what makes
+  // her talking-points card render for Jennifer in scene 3.
+  //
+  // It writes a real row to checkin_events, so it only works once per day.
+  // On a re-run the button is gone, clickIfExists logs a warning and carries
+  // on, and scene 3 still works because she is already checked in. To film
+  // this motion again, clear the row first — see RESET at the bottom.
+  await clickIfExists(
+    page,
+    'article:has-text("Linda Taylor") button:has-text("Check in patient")',
+    4000
+  );
 
   // ── SCENE 3 — Jennifer / TC (20s) ───────────────────────
   console.log('[3/7] Jennifer — treatment coordinator...');
@@ -180,13 +208,11 @@ async function main() {
   // (status checked_in). A WAITING patient renders a stripped WaitingCard with
   // no scripts at all, by design — PatientFinancial.tsx:986.
   //
-  // On today's roster that bucket is empty (ready=0, Linda Taylor still
-  // WAITING), so nothing to show. Aug 9 2026 has two ready patients with
-  // Linda Taylor first, which is what makes the tabs render.
-  await page.selectOption('select', '2026-08-09');
-  await sleep(3500);
+  // Linda Taylor is in that bucket because Sarah checked her in during scene
+  // 2, on today's date. No date-picker detour needed: the two scenes are the
+  // same working day, and the hand-off is the story.
 
-  // Hold on Talking points — the default tab on each ready card
+  // Hold on Talking points — the default tab on her card
   await sleep(5000);
 
   await clickIfExists(page, 'button:has-text("Treatment & cost")', 4000);
