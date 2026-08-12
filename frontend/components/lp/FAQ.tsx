@@ -22,7 +22,7 @@ const FAQS = [
   },
   {
     q: "Is my patient data secure?",
-    a: "Yes. HIPAA compliant. Data encrypted at rest and in transit. Tenant-isolated — your data is never shared with other practices.",
+    a: "Yes. HIPAA-ready architecture. Data encrypted at rest and in transit. Tenant-isolated — your data is never shared with other practices. Formal attestation in progress.",
   },
   {
     q: "Which payers are supported?",
