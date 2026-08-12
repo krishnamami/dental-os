@@ -148,13 +148,20 @@ async function main() {
   }
   await sleep(2000);
 
-  // Patient cards are read-only. The HEADS UP filter is the live control —
-  // it narrows the board to the flagged patients, James Mitchell among them.
-  await clickIfExists(page, 'button:has-text("HEADS UP")', 4000);
+  // Nothing expands here: the patient cards render their AT A GLANCE detail
+  // up front, and no element in a card carries a click handler (verified via
+  // React fiber props — no onClick anywhere in the James Mitchell subtree).
+  // The HEADS UP filter is the live control, narrowing to the flagged
+  // patients; the scroll then brings AT A GLANCE into frame.
+  await clickIfExists(page, 'button:has-text("HEADS UP")', 3000);
+
+  await page.evaluate(() =>
+    window.scrollBy({ top: 320, behavior: 'smooth' })
+  );
 
   // Hold on AT A GLANCE —
   // insurance active, 4 items flagged
-  await sleep(6000);
+  await sleep(7000);
 
   // ── SCENE 3 — Jennifer / TC (20s) ───────────────────────
   console.log('[3/7] Jennifer — treatment coordinator...');
@@ -168,14 +175,23 @@ async function main() {
   }
   await sleep(2000);
 
-  // No patient detail view exists on /coverage, so the scene walks the three
-  // consultation states instead. Linda Taylor is visible under WAITING.
-  await clickIfExists(page, 'button:has-text("WAITING")', 5000);
-  await clickIfExists(page, 'button:has-text("CONSULTATION DONE")', 4000);
-  await clickIfExists(page, 'button:has-text("READY FOR CONSULTATION")', 4000);
+  // The talking-points card is NOT opened by clicking a patient — the cards
+  // carry their own tabs, and only for the READY FOR CONSULTATION bucket
+  // (status checked_in). A WAITING patient renders a stripped WaitingCard with
+  // no scripts at all, by design — PatientFinancial.tsx:986.
+  //
+  // On today's roster that bucket is empty (ready=0, Linda Taylor still
+  // WAITING), so nothing to show. Aug 9 2026 has two ready patients with
+  // Linda Taylor first, which is what makes the tabs render.
+  await page.selectOption('select', '2026-08-09');
+  await sleep(3500);
 
-  // Hold on the board
-  await sleep(4000);
+  // Hold on Talking points — the default tab on each ready card
+  await sleep(5000);
+
+  await clickIfExists(page, 'button:has-text("Treatment & cost")', 4000);
+  await clickIfExists(page, 'button:has-text("Checklist")', 3000);
+  await clickIfExists(page, 'button:has-text("Talking points")', 2000);
 
   // ── SCENE 4 — Dr. Chinta (16s) ──────────────────────────
   console.log('[4/7] Dr. Chinta — clinical workbench...');
