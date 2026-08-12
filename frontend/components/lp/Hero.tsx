@@ -202,17 +202,17 @@ const PREDS: Pred[] = [
 const TABS = ["Decision", "Evidence", "Conditions", "Audit"] as const;
 
 const TRUST = [
-  { icon: "🔒", label: "HIPAA compliant" },
-  { icon: "📋", label: "Audit trail built in" },
-  { icon: "⚖", label: "ADA + payer citations" },
-  { icon: "🌐", label: "No black boxes" },
+  { icon: "✓", label: "Bundling conflicts caught before submission" },
+  { icon: "✓", label: "Appeal letters in 90 seconds" },
+  { icon: "✓", label: "Patient cost calculated exactly" },
+  { icon: "✓", label: "Every decision traceable to policy" },
 ];
 
 const STATS = [
-  { value: "15 min → 3s", label: "Coverage check speed" },
-  { value: "65%", label: "Appeal overturn rate" },
-  { value: "3 layers", label: "ADA · Payer · Overlay" },
-  { value: "Zero", label: "Surprise patient bills" },
+  { value: "Automated", label: "Overnight eligibility check" },
+  { value: "65%", label: "Appeal overturn rate with documentation" },
+  { value: "45%", label: "Industry bone graft denial rate" },
+  { value: "14 flags", label: "Submission readiness score per pre-D" },
 ];
 
 export default function Hero() {
@@ -238,7 +238,7 @@ export default function Hero() {
     tabTimer.current = setInterval(() => {
       cur = (cur + 1) % TABS.length;
       setActiveTab(cur);
-    }, 2800);
+    }, 4500);
   }
 
   function resetPredTimer(start: number) {
@@ -248,7 +248,7 @@ export default function Hero() {
       cur = (cur + 1) % PREDS.length;
       setActivePred(cur);
       setActiveTab(0);
-    }, 13000);
+    }, 16000);
   }
 
   function pickPred(n: number) {
@@ -295,8 +295,9 @@ export default function Hero() {
           </h1>
 
           <p className="mt-5 max-w-lg text-lg leading-relaxed text-slate-500">
-            From patient check-in to DSO analytics — every signal has a
-            citation, every decision has a trail, and every denial has a fix.
+            AccordDental reads your payer rules, checks your
+            clinical docs, and flags every bundling conflict
+            before the pre-D leaves your practice.
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
@@ -311,7 +312,7 @@ export default function Hero() {
             {/* Toggles its own state AND goes somewhere. A button whose
                 only effect is to recolour itself is a dead control. */}
             <a
-              href="#see-it"
+              href="#what-if"
               onClick={() => setSeeActive(true)}
               className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-semibold transition"
               style={{
@@ -325,9 +326,8 @@ export default function Hero() {
             </a>
           </div>
 
-          {/* "HIPAA compliant" describes the architecture. There is no
-              third-party attestation behind it yet, and it needs one or
-              a footnote before it meets a buyer's security review. */}
+          {/* Benefit statements, not compliance claims — each one is
+              something the product demonstrably does on this page. */}
           <ul className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-400">
             {TRUST.map((t) => (
               <li key={t.label} className="flex items-center gap-1.5">
