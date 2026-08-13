@@ -312,7 +312,7 @@ export default function Hero() {
             {/* Toggles its own state AND goes somewhere. A button whose
                 only effect is to recolour itself is a dead control. */}
             <a
-              href="#what-if"
+              href="#demo"
               onClick={() => setSeeActive(true)}
               className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border px-5 py-2.5 text-sm font-semibold transition"
               style={{
