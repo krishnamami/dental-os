@@ -155,6 +155,10 @@ function fetchTokenOnce(email) {
       },
     }, (res) => {
       let data = '';
+      // A reset mid-response fires on the response stream, not the request —
+      // without this the rejection escapes as an unhandled socket error and
+      // kills the run despite the retry loop below.
+      res.on('error', reject);
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try {
@@ -348,7 +352,7 @@ async function record(browser, tokens) {
   await go(page, BASE);
   await caption(page,
     'AccordDental — Pre-D intelligence for dental practices and DSOs.');
-  await sleep(6000);
+  await sleep(3700);   // S1 intro: narration @0.0s, video @0.0s
   await clearCaption(page);
 
   // ── SCENE 2 — Sarah / front desk (12s) ─────────────────────────────────
@@ -356,44 +360,44 @@ async function record(browser, tokens) {
   await switchPersona(page, tokens.sarah, `${BASE}/checkin`, 'Good morning, Sarah');
   await caption(page,
     'Sarah is at the front desk. Linda Taylor arrives for a crown at nine thirty.');
-  await sleep(6000);   // 15 words @ ~2.5 w/s
+  await sleep(8100);   // S2 Sarah: narration @5.2s, video @5.2s
 
   await clickIfExists(page,
     'article:has-text("Linda Taylor") button:has-text("Check in patient")', 500);
   await caption(page, 'One click. Checked in.');
-  await sleep(6000);
+  await sleep(1000);   // S2 One click: narration @13.8s, video @13.8s
   await clearCaption(page);
 
   // ── SCENE 3 — Jennifer / TC (18s) ──────────────────────────────────────
   console.log('[3/7] Jennifer — treatment coordinator');
   await switchPersona(page, tokens.jennifer, `${BASE}/coverage`, 'Good morning, Jennifer');
   await page.selectOption('select', '2026-08-09').catch(() => {});
-  await sleep(3000);
+  await sleep(1200);
   await caption(page,
     'Jennifer is the treatment coordinator. Linda is now ready.');
-  await sleep(4000);
+  await sleep(3300);   // S3 Jennifer: narration @16.1s, video @17.5s
 
   await clickIfExists(page, 'button:has-text("Talking points")', 500);
   await caption(page,
     'Accord has already written her talking points — what to say, ' +
     'what to warn, what to collect.');
-  await sleep(7000);   // 17 words @ ~2.4 w/s
+  await sleep(9300);   // S3 talking pts: narration @21.2s, video @21.2s
 
   await clickIfExists(page, 'button:has-text("Treatment & cost")', 500);
   await caption(page,
     'Six hundred and twenty dollars. Not an estimate. The number.');
-  await sleep(4000);
+  await sleep(5200);   // S3 $620: narration @31.0s, video @31.0s
 
   await clickIfExists(page, 'button:has-text("Checklist")', 500);
   await caption(page, 'Every item covered before Linda leaves.');
-  await sleep(4000);
+  await sleep(1900);   // S3 checklist: narration @36.7s, video @36.7s
   await clearCaption(page);
 
   // ── SCENE 4 — Dr. Chinta (14s) ─────────────────────────────────────────
   console.log('[4/7] Dr. Chinta — clinical workbench');
   await switchPersona(page, tokens.drchinta, `${BASE}/workbench`, 'Good morning, Dr. Chinta');
   await caption(page, "Dr. Chinta opens James Mitchell's implant case.");
-  await sleep(3000);
+  await sleep(2700);   // S4 opens: narration @40.2s, video @40.2s
 
   // James Mitchell is already selected on load, so clicking him first would be
   // a silent no-op. Step to Linda Taylor and back for visible motion.
@@ -402,12 +406,12 @@ async function record(browser, tokens) {
   await caption(page,
     'Clinical criteria met — four point two millimeters bone loss. ' +
     'But the narrative is missing.');
-  await sleep(6000);   // 15 words @ ~2.5 w/s
+  await sleep(8600);   // S4 criteria: narration @44.2s, video @44.2s
 
   await page.evaluate(() => window.scrollBy({ top: 500, behavior: 'smooth' }));
   await caption(page,
     'Accord drafted it from the chart. Dr. Chinta reviews and signs.');
-  await sleep(5000);
+  await sleep(4800);   // S4 drafted: narration @52.8s, video @52.8s
   await clearCaption(page);
 
   // ── SCENE 5 — Kim / revenue ops (14s) ──────────────────────────────────
@@ -416,18 +420,18 @@ async function record(browser, tokens) {
   await caption(page,
     'Kim runs revenue operations. Three cases blocked. ' +
     'Nine thousand four hundred and fifty dollars at risk.');
-  await sleep(6500);   // 16 words @ ~2.5 w/s
+  await sleep(8700);   // S5 Kim: narration @59.1s, video @59.1s
 
   await clickIfExists(page, 'text=Conditions', 500);
   await caption(page,
     'Every condition sorted by SLA. Every denial has a citation.');
-  await sleep(4000);
+  await sleep(5200);   // S5 conditions: narration @68.3s, video @68.3s
 
   await clickIfExists(page, 'text=Appeals', 500);
   await caption(page,
     'Three appeals filed. Fifty percent overturn rate. ' +
     'One thousand eight hundred dollars recovered.');
-  await sleep(4000);
+  await sleep(6000);   // S5 appeals: narration @74.0s, video @74.0s
   await clearCaption(page);
 
   // ── SCENE 6 — Dr. Shyam / DSO (10s) ────────────────────────────────────
@@ -436,13 +440,13 @@ async function record(browser, tokens) {
   await caption(page,
     'Dr. Shyam owns two practices. Fifty-five thousand six hundred ' +
     'and fifty dollars sitting with payers right now.');
-  await sleep(7000);   // 17 words @ ~2.4 w/s
+  await sleep(9300);   // S6 Shyam: narration @81.5s, video @81.5s
 
   await clickIfExists(page, "text=What's holding cases up", 500);
   await caption(page,
     'Twenty-one cases missing a pre-auth. Nine missing a radiograph. ' +
     'Seven with no clinical narrative. Every cause. Every owner. Named.');
-  await sleep(7600);   // 19 words @ ~2.5 w/s
+  await sleep(10000);   // S6 causes: narration @91.2s, video @91.2s
   await clearCaption(page);
 
   // ── SCENE 7 — Back to landing page (5s) ────────────────────────────────
@@ -451,7 +455,7 @@ async function record(browser, tokens) {
   await caption(page,
     'AccordDental. Every signal has a citation. Every decision has a trail. ' +
     'Every denial has a fix.');
-  await sleep(5000);
+  await sleep(9200);   // S7 closing: narration @102.1s, video @102.1s
   await clearCaption(page);
 
   // ── STEP 3 — stop recorder ─────────────────────────────────────────────
