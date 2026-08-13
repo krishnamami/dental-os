@@ -1,4 +1,4 @@
-import { ArrowRight, Play } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 import { Container, Eyebrow, H2, Section, Sub } from "./primitives";
 
@@ -20,13 +20,17 @@ export default function DemoSection() {
           </Sub>
         </div>
 
-        <div className="mx-auto mt-10 flex aspect-video max-h-[380px] w-full max-w-4xl items-center justify-center rounded-xl border border-gray-200 bg-gray-100">
-          <div className="text-center">
-            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-gray-400 shadow-sm">
-              <Play size={22} fill="currentColor" />
-            </span>
-            <p className="mt-3 text-sm text-gray-500">Demo video coming soon</p>
-          </div>
+        <div className="mx-auto mt-10 w-full max-w-4xl">
+          <video
+            src="/accord_dental_demo.mp4"
+            controls
+            playsInline
+            poster=""
+            className="w-full rounded-xl shadow-lg"
+            style={{ maxHeight: '520px', background: '#000' }}
+          >
+            Your browser does not support the video tag.
+          </video>
         </div>
 
         <div className="mt-7 flex flex-col items-center gap-2.5 sm:flex-row sm:flex-wrap sm:justify-center sm:gap-x-7">
