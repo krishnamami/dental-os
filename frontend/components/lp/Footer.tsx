@@ -1,7 +1,16 @@
 import { AccordLogo } from "../AccordLogo";
 import { Container } from "./primitives";
 
-const COLUMNS = [
+type ColLink = { label: string; href: string };
+type Col = {
+  heading: string;
+  links: string[];
+  href: string;
+  /** Set when a column's entries point at different destinations. */
+  customLinks?: ColLink[];
+};
+
+const COLUMNS: Col[] = [
   {
     heading: "Platform",
     links: [
@@ -26,13 +35,18 @@ const COLUMNS = [
   },
   {
     heading: "Resources",
-    links: ["Docs", "Blog", "Pricing", "Changelog", "Status"],
+    links: ["Docs", "Blog", "Pricing"],
     href: "#faq",
   },
   {
     heading: "Company",
-    links: ["About", "Careers", "Contact us", "Demo"],
-    href: "#demo-cta",
+    links: [],
+    href: "",
+    customLinks: [
+      { label: "About", href: "#what-if" },
+      { label: "Contact us", href: "mailto:hello@accorddental.io" },
+      { label: "Demo", href: "#demo" },
+    ],
   },
 ];
 
@@ -57,13 +71,16 @@ export default function Footer() {
                 {col.heading}
               </h3>
               <ul className="mt-3 space-y-2">
-                {col.links.map((l) => (
-                  <li key={l}>
+                {(
+                  col.customLinks ??
+                  col.links.map((l) => ({ label: l, href: col.href }))
+                ).map((link) => (
+                  <li key={link.label}>
                     <a
-                      href={col.href}
+                      href={link.href}
                       className="text-[12.5px] text-gray-500 transition hover:text-accord-green-900"
                     >
-                      {l}
+                      {link.label}
                     </a>
                   </li>
                 ))}
