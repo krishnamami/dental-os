@@ -44,7 +44,10 @@ const COLUMNS: Col[] = [
     href: "",
     customLinks: [
       { label: "About", href: "#what-if" },
-      { label: "Contact us", href: "mailto:hello@accorddental.io" },
+      {
+        label: "Contact us",
+        href: "https://docs.google.com/forms/d/e/1FAIpQLScQ0iD1sH_oIC7AT14O_ZQPNL_nylxv2BUPrFM1J2f0-KkhOA/viewform",
+      },
       { label: "Demo", href: "#demo" },
     ],
   },
@@ -76,8 +79,18 @@ export default function Footer() {
                   col.links.map((l) => ({ label: l, href: col.href }))
                 ).map((link) => (
                   <li key={link.label}>
+                    {/* External destinations open in a new tab, with
+                        rel="noopener" so the opened page cannot reach
+                        back through window.opener. In-page anchors stay
+                        in the same tab. */}
                     <a
                       href={link.href}
+                      target={link.href.startsWith("http") ? "_blank" : undefined}
+                      rel={
+                        link.href.startsWith("http")
+                          ? "noopener noreferrer"
+                          : undefined
+                      }
                       className="text-[12.5px] text-gray-500 transition hover:text-accord-green-900"
                     >
                       {link.label}
