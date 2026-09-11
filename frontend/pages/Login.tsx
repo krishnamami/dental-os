@@ -5,8 +5,13 @@
  * back. The role in the token is the server's answer, not this
  * screen's suggestion — the old role picker is gone with it.
  *
- * ⚠ THE DEMO CREDENTIAL PANEL IS GONE from this screen, but THE
- * ACCOUNTS ARE NOT GONE from the database. Eleven users still
+ * ⚠ THE DEMO CREDENTIAL PANEL AND THE ?demo=true LINK ARE GONE from
+ * this screen. NEITHER MECHANISM IS GONE from the system.
+ *
+ * Anonymous demo access still works by URL: /workbench?demo=true
+ * still sets X-Demo-Mode, and require_claims_or_demo still accepts
+ * it for reads of the suwanee_smiles corpus. And THE ACCOUNTS ARE
+ * NOT GONE from the database either. Eleven users still
  * authenticate with the shared demo password, one of them an
  * accord_admin that can impersonate every other user. Removing the
  * panel stops PUBLISHING them; it does not revoke them. They have to
@@ -172,15 +177,6 @@ export default function Login() {
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
-
-          <p className="text-center text-[13px] text-gray-500">
-            <Link
-              to="/workbench?demo=true"
-              className="font-medium text-accord-green-900 hover:text-accord-green-700"
-            >
-              Try the demo without signing in →
-            </Link>
-          </p>
         </form>
 
         <p className="mt-6 text-center text-[12.5px] text-gray-500">
