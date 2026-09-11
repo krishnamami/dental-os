@@ -1,0 +1,24 @@
+# accorddental.io
+#
+# RECONSTRUCTED 2026-09-11. The original was uploaded straight to
+# s3://accorddental-io-www and was never in this repo, so a deploy with
+# `aws s3 sync --delete` removed it and there was no versioning to
+# recover from. It lives in public/ now so Vite copies it into dist/ and
+# the next sync cannot delete it again.
+
+User-agent: *
+
+# Only / and /login are public. Everything below is behind
+# ProtectedRoute, but this is a SPA on CloudFront: an unrouted path
+# returns index.html with status 200, so a crawler that guesses one gets
+# a page rather than a 404 and would happily index it.
+Disallow: /app
+Disallow: /workbench
+Disallow: /checkin
+Disallow: /coverage
+Disallow: /evidence
+Disallow: /revenue-ops
+Disallow: /dso
+Disallow: /admin
+
+Sitemap: https://www.accorddental.io/sitemap.xml
