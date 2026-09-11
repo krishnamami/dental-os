@@ -15,8 +15,26 @@ interface Product {
   tone: string;
   title: string;
   body: string;
-  /** Omitted when there is no anonymous demo — see DSO below. */
+  /**
+   * ⚠ NOW OMITTED ON EVERY PRODUCT, 2026-09-11.
+   *
+   * These were four `?demo=true` links — anonymous, credential-free
+   * reads of the suwanee_smiles corpus, the same mechanism that had
+   * already been closed on /portfolio/summary (see DSO below). They
+   * were removed together with the demo panel and the demo CTA on
+   * /login, so the site no longer advertises a way in without signing
+   * in.
+   *
+   * THE MECHANISM STILL WORKS BY URL. require_claims_or_demo still
+   * honours X-Demo-Mode for reads of that corpus; only the links are
+   * gone. Closing it properly is an API change, not a link change.
+   *
+   * The rendering below still branches on href, so restoring any one
+   * demo is a one-line change.
+   */
   href?: string;
+  /** Overrides the default "available after sign-in" line. */
+  note?: string;
 }
 
 const PRODUCTS: Product[] = [
@@ -27,7 +45,6 @@ const PRODUCTS: Product[] = [
     body:
       "Submission readiness in one view. Every condition flagged with " +
       "assignee, SLA, and citation.",
-    href: "/workbench?demo=true",
   },
   {
     icon: ShieldCheck,
@@ -36,7 +53,6 @@ const PRODUCTS: Product[] = [
     body:
       "181 CDT codes × 6 payers × 7 states. UCR → patient pays — shown " +
       "before the patient sits down.",
-    href: "/coverage?demo=true",
   },
   {
     icon: FileText,
@@ -45,7 +61,6 @@ const PRODUCTS: Product[] = [
     body:
       "From PA X-ray to ADA citation automatically. Bone loss, pocket " +
       "depth, confidence scores.",
-    href: "/evidence/PRED-SIM-DA-A01?demo=true",
   },
   {
     icon: Receipt,
@@ -54,7 +69,6 @@ const PRODUCTS: Product[] = [
     body:
       "Submissions, conditions, appeals, collections. One view for " +
       "billing and revenue cycle teams.",
-    href: "/revenue-ops?demo=true",
   },
 ];
 
@@ -75,6 +89,10 @@ const DSO: Product = {
   //
   // A DSO demo needs a signed-in dso_owner. When there is one to send
   // people to, put the href back.
+  //
+  // This one is genuinely owner-only, which the other four are not —
+  // hence the override.
+  note: "Available to signed-in group owners",
 };
 
 function Card({ product, wide = false }: { product: Product; wide?: boolean }) {
@@ -114,7 +132,7 @@ function Card({ product, wide = false }: { product: Product; wide?: boolean }) {
           </span>
         ) : (
           <span className="mt-3 inline-flex text-[13px] font-medium text-gray-400">
-            Available to signed-in group owners
+            {product.note ?? "Available after sign-in"}
           </span>
         )}
       </div>

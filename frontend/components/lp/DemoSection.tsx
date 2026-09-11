@@ -2,9 +2,12 @@ import { ArrowRight } from "lucide-react";
 
 import { Container, Eyebrow, H2, Section, Sub } from "./primitives";
 
+// The middle entry here was { "See DA-A01 implant case", "/?demo=true" }.
+// Removed 2026-09-11 with the other demo CTAs — and it was broken anyway:
+// "/" is the landing page, so it promised a specific case and returned
+// the visitor to the page they were already on.
 const LINKS = [
   { label: "Book a live demo", href: "#demo-cta" },
-  { label: "See DA-A01 implant case", href: "/?demo=true" },
   { label: "View all 50 scenarios", href: "#products" },
 ];
 
