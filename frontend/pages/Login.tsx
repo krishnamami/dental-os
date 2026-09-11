@@ -5,71 +5,20 @@
  * back. The role in the token is the server's answer, not this
  * screen's suggestion — the old role picker is gone with it.
  *
- * ⚠ THE DEMO PANEL PUBLISHES ELEVEN WORKING CREDENTIALS, one of them
- * an accord_admin that can impersonate every other user, on a page
- * anyone on the internet can reach. That is a deliberate trade while
- * the corpus is synthetic and the whole point is a self-serve demo.
- * It has to come out before a real patient exists in that database —
- * along with the accounts themselves.
+ * ⚠ THE DEMO CREDENTIAL PANEL IS GONE from this screen, but THE
+ * ACCOUNTS ARE NOT GONE from the database. Eleven users still
+ * authenticate with the shared demo password, one of them an
+ * accord_admin that can impersonate every other user. Removing the
+ * panel stops PUBLISHING them; it does not revoke them. They have to
+ * be rotated or deleted in seed_users.py before a real patient
+ * exists in that database.
  */
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { AccordLogo } from "../components/AccordLogo";
 import { HOME_FOR_ROLE, statusOf, useAuth } from "../context/AuthContext";
 import type { Role } from "../types/dental";
-
-const ROLE_BADGE: Record<Role, { label: string; cls: string }> = {
-  dentist: { label: "Dentist", cls: "bg-accord-green-50 text-accord-green-700" },
-  dso_owner: { label: "Practice owner", cls: "bg-blue-50 text-blue-700" },
-  tx_coord: { label: "Treatment coord", cls: "bg-purple-50 text-purple-700" },
-  revenue_ops: { label: "Revenue ops", cls: "bg-amber-50 text-amber-700" },
-  front_desk: { label: "Front desk", cls: "bg-gray-100 text-gray-600" },
-  accord_admin: { label: "Admin", cls: "bg-slate-800 text-white" },
-};
-
-const DEMO_GROUPS: Array<{
-  tenant: string;
-  users: Array<{ name: string; email: string; role: Role }>;
-}> = [
-  {
-    tenant: "Suwanee Smiles Dental",
-    users: [
-      { name: "Dr. Sridhar Chinta", email: "drchinta@suwaneesmiles.com", role: "dentist" },
-      { name: "Dr. Shyam Patel", email: "drshyam@suwaneesmiles.com", role: "dso_owner" },
-      { name: "Jennifer M.", email: "tc@suwaneesmiles.com", role: "tx_coord" },
-      { name: "Kim B.", email: "billing@suwaneesmiles.com", role: "revenue_ops" },
-      { name: "Sarah R.", email: "sarah@suwaneesmiles.com", role: "front_desk" },
-    ],
-  },
-  {
-    tenant: "Tampa Bay Smiles",
-    users: [
-      { name: "Dr. Maria Rodriguez", email: "drrodriguez@tampabaysmiles.com", role: "dentist" },
-      // Dr. Shyam's Tampa login was merged into his Suwanee account
-      // and deactivated — he owns both practices through
-      // tenant_ownership now. Leaving the chip here would offer a
-      // credential that no longer authenticates.
-      { name: "Maria C.", email: "tc@tampabaysmiles.com", role: "tx_coord" },
-      { name: "Kim T.", email: "billing@tampabaysmiles.com", role: "revenue_ops" },
-      { name: "Sarah T.", email: "sarah@tampabaysmiles.com", role: "front_desk" },
-    ],
-  },
-  {
-    tenant: "Dallas Family Dental",
-    users: [
-      { name: "Dr. James Wilson", email: "drwilson@dallasfamilydental.com", role: "dentist" },
-      { name: "Kim D.", email: "billing@dallasfamilydental.com", role: "revenue_ops" },
-      { name: "Dr. Alan Reyes", email: "drreyes@dallasfamilydental.com", role: "dso_owner" },
-    ],
-  },
-  {
-    tenant: "Accord platform",
-    users: [
-      { name: "Accord Admin", email: "admin@accorddental.io", role: "accord_admin" },
-    ],
-  },
-];
 
 /**
  * What to tell the visitor, by what actually came back.
@@ -113,16 +62,11 @@ function messageFor(status: number | undefined): string {
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const passwordRef = useRef<HTMLInputElement>(null);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  // Collapsed on load. Eleven working credentials — one of them an
-  // admin that can impersonate anyone — should not be the first thing
-  // on the page. Someone who needs them knows to look.
-  const [showDemo, setShowDemo] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -159,12 +103,6 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
-  }
-
-  function fill(addr: string) {
-    setEmail(addr);
-    setError("");
-    passwordRef.current?.focus();
   }
 
   const field =
@@ -211,7 +149,6 @@ export default function Login() {
             </label>
             <input
               id="password"
-              ref={passwordRef}
               type="password"
               autoComplete="current-password"
               value={password}
@@ -245,65 +182,6 @@ export default function Login() {
             </Link>
           </p>
         </form>
-
-        {/* ── Demo accounts ─────────────────────────────────────── */}
-        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-4">
-          <button
-            type="button"
-            onClick={() => setShowDemo((v) => !v)}
-            aria-expanded={showDemo}
-            aria-controls="demo-accounts"
-            className="flex items-center gap-1 text-sm text-slate-500 transition hover:text-slate-700"
-          >
-            <span aria-hidden="true">{showDemo ? "▾" : "▸"}</span>
-            Demo accounts · password: demo2026
-          </button>
-
-          {showDemo && (
-            <div id="demo-accounts">
-              <p className="mt-2 text-[11px] text-gray-400">
-                Click a name to fill the email. Every account reads the same
-                synthetic corpus.
-              </p>
-
-              {DEMO_GROUPS.map((g) => (
-                <div key={g.tenant} className="mt-3.5">
-                  <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-gray-400">
-                    {g.tenant}
-                  </p>
-                  <ul className="divide-y divide-gray-100">
-                    {g.users.map((u) => {
-                      const badge = ROLE_BADGE[u.role];
-                      return (
-                        <li key={u.email}>
-                          <button
-                            type="button"
-                            onClick={() => fill(u.email)}
-                            className="flex w-full items-center gap-2 rounded px-1.5 py-2 text-left transition hover:bg-gray-50"
-                          >
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[12.5px] font-medium text-gray-800">
-                                {u.name}
-                              </span>
-                              <span className="block truncate font-mono text-[10.5px] text-gray-400">
-                                {u.email}
-                              </span>
-                            </span>
-                            <span
-                              className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[9.5px] font-semibold ${badge.cls}`}
-                            >
-                              {badge.label}
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                      </ul>
-                    </div>
-              ))}
-            </div>
-          )}
-        </div>
 
         <p className="mt-6 text-center text-[12.5px] text-gray-500">
           Request access →{" "}
