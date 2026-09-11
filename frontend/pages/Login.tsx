@@ -71,6 +71,45 @@ const DEMO_GROUPS: Array<{
   },
 ];
 
+/**
+ * What to tell the visitor, by what actually came back.
+ *
+ * These cases must stay separate. `undefined` means NO RESPONSE
+ * ARRIVED — the API is down, DNS failed, or the browser blocked it.
+ * This used to share the 401 wording, which told someone their
+ * password was wrong while the service was off: they retype it, then
+ * reset it, and the outage never gets reported. statusOf's docstring
+ * said these two must not collapse; the caller collapsed them anyway.
+ *
+ * 401 stays deliberately vague. The API answers a wrong password and
+ * an unknown email identically so the form cannot be used to discover
+ * which addresses exist, and echoing anything sharper here would undo
+ * that. Everything else is an OUR-FAULT status and says so, with the
+ * code, because "try again" is useless advice for a 502 and the number
+ * is what makes a support message actionable.
+ */
+function messageFor(status: number | undefined): string {
+  if (status === 401) return "Invalid email or password";
+  if (status === undefined) {
+    return "Can't reach the sign-in service. Check your connection and try again.";
+  }
+  // asPayload() stamps 502 on a 200 whose body was not a session — in
+  // production, index.html from the SPA fallback, i.e. /api is not
+  // routed to dental-os at all. Retrying cannot fix that.
+  if (status === 502) {
+    return "Sign-in is misconfigured on this deployment — the service did not return a session. Please report this.";
+  }
+  // Two sources, same answer to the visitor: _pool() raises 503 when
+  // auth never got a database at startup, and the ALB returns its own
+  // 503 when the dental-os target group has no healthy task at all.
+  // The second is an nginx-style HTML page, not FastAPI JSON — which
+  // is how you tell them apart in a curl.
+  if (status === 503) {
+    return "Sign-in is temporarily unavailable. Please try again in a few minutes.";
+  }
+  return `Sign-in failed (error ${status}). Please try again, and report this if it persists.`;
+}
+
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -111,16 +150,12 @@ export default function Login() {
         replace: true,
       });
     } catch (err) {
-      // Never echo the server's wording for a bad credential. The API
-      // deliberately says the same thing for a wrong password and an
-      // unknown email; repeating anything more specific here would
-      // undo that.
-      const status = statusOf(err);
-      setError(
-        status === 401 || status === undefined
-          ? "Invalid email or password"
-          : "Could not reach the sign-in service. Try again.",
-      );
+      // The real error never reaches the visitor — messageFor() is
+      // deliberately vague about credentials. Log it so a failing
+      // deployment is diagnosable from the console instead of from
+      // four words on a red line.
+      console.error("sign-in failed", err);
+      setError(messageFor(statusOf(err)));
     } finally {
       setBusy(false);
     }

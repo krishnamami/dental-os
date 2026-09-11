@@ -1,6 +1,6 @@
 # Accord Dental OS — Project Context
 
-**Last updated:** 2026-08-06 &nbsp;·&nbsp; **Phase:** 5 (runner) COMPLETE &nbsp;·&nbsp; **Next:** Phase 6 — API surface
+**Last updated:** 2026-09-11 &nbsp;·&nbsp; **Phase:** 5 (runner) COMPLETE &nbsp;·&nbsp; **Next:** Phase 6 — API surface
 
 > This file tracks build **state** — it changes every session.
 > `docs/PRD.md` describes product **intent** and `domains/dental/decisions.yaml`
@@ -33,16 +33,20 @@ loaded first** — this repo has no data of its own and never will.
 python scripts/test_connection.py
 ```
 
-Expected, re-verified against the live RDS on 2026-08-06 **after Group U
-landed** — every number below moved except the catalogue tables:
+Expected, last re-verified against the live RDS on **2026-09-11**, after the
+restore in the RDS runbook below. The 2026-08-06 Group U numbers all held;
+the payer-scoped catalogue doubled when three payers were added — see the
+warning under the block:
 
 ```
   pred_requests        40      (approved=13, denied=7, pended=20)
   pred_states          40      same distribution
   clinical_evidence   212      (124 with an s3_key)
   procedure_lines      72
-  fee_schedules       588      28 codes x 3 payers x 7 states
-  coverage_rules      543      181 codes x 3 payers   (was 14)
+  payers                6      was 3 — guardian_dpo, humana_dpo, metlife added
+  plans                 6      one per payer
+  fee_schedules      1176      28 codes x 6 payers x 7 states  (was 588)
+  coverage_rules     1086      181 codes x 6 payers            (was 543)
   cdt_codes           181
   conditions_library   50
   frequency_limits     27
@@ -56,22 +60,38 @@ landed** — every number below moved except the catalogue tables:
 > **If you have a memory of "35 scenarios, approved=8", it is from before
 > 2026-08-06.** Group U added 5 approvals. Any script asserting 35 is stale.
 
+> **These counts are RLS-scoped to `suwanee_smiles`.** `/api/health` reports
+> `simulator_scenarios: 50` because it sums `pred_requests` across all three
+> active tenants — 40 is this practice's share. The two numbers do not
+> disagree and neither is stale; see the comment at `api/main.py:175`.
+
+> ⚠ **`scripts/test_connection.py` asserts `>=`, so it said nothing when the
+> payer set went 3 → 6** somewhere between 2026-08-06 and 2026-09-02. It
+> fails on rows LOST and is silent on rows ADDED, and nobody wrote the change
+> down — the second time this table has gone stale the same way. Re-measure
+> against the live RDS before trusting any number here.
+
 ## Catalogue versions
 
-`catalogue_versions` tracks 9 catalogues. Every decision stamps these into
+`catalogue_versions` tracks 10 catalogues. Every decision stamps these into
 `persona_bundles`, so a replay can tell whether the rules moved underneath it.
 
 | catalogue | version | rows | states |
 |---|---|---|---|
 | `cdt_codes` | CDT-2026 | 181 | ALL |
-| `coverage_rules` | 1.1 | **543** | ALL |
-| `fee_schedules` | 2025-07-01 | **588** | GA FL TX NC SC TN AL |
+| `coverage_rules` | 1.1 | **1086** | ALL |
+| `fee_schedules` | 2025-07-01 | **1176** | GA FL TX NC SC TN AL |
 | `conditions_library` | 1.0 | 50 | ALL |
 | `frequency_limits` | 1.0 | 27 | ALL |
 | `bundling_rules` | 1.0 | 20 | ALL |
 | `ada_guidelines` | CDT-2026 | 10 | ALL |
 | `downgrade_matrix` | 1.0 | 9 | ALL |
 | `medical_history_flags` | 1.0 | 8 | ALL |
+
+> Row counts re-measured 2026-09-11. The **version strings were not** — a
+> tenth catalogue row exists and the three added payers may or may not have
+> cut new versions. Read `catalogue_versions` directly before relying on
+> the version column.
 
 ---
 
@@ -415,6 +435,29 @@ dental-api, and those live in **dental-simulator**:
     no stack                owns task definition dental-os
     no stack                owns log group /ecs/dental-os
 
+### The DATABASE, however, IS in a stack
+
+Verified 2026-09-11:
+
+    dental-rds stack        owns dental-postgres           AWS::RDS::DBInstance
+    dental-rds stack        owns dental-db-subnets-public  AWS::RDS::DBSubnetGroup
+
+⚠ The heading above is about dental-os's COMPUTE. **Do not generalise it to
+the RDS instance.** That mistake was made on 2026-09-11 and ended with
+`delete-db-instance` run against a CloudFormation-managed resource. It was
+recoverable only because the replacement took the same
+`DBInstanceIdentifier`, which is what CloudFormation stores as the physical
+id — so the stack silently re-resolved to the new instance.
+
+Two things that make this easy to get wrong again:
+
+  · **A restored instance carries no tags at all.** CloudFormation stamps
+    `aws:cloudformation:*` at create time and they do not survive a restore,
+    so an empty `TagList` is NOT evidence that a resource is unmanaged.
+    Check `list-stack-resources`, never the tags.
+  · `dental-db-subnets-public` is in the same stack and is in use. Deleting
+    the `dental-rds` stack would take the subnet group with it.
+
 **Drift detection cannot see any of it.** `detect-stack-drift` compares
 live resources against a stack's *stored template*; a resource no stack
 declares is not drift, it is invisible. `dental-ecs` reporting IN_SYNC
@@ -472,6 +515,127 @@ Bringing the service, task definition and log group under IaC needs
 a plain deploy fails with "already exists" on every one of them.
 **Deferred deliberately.** Until it happens, treat any AWS change for
 dental-os as manual, and write it down here.
+
+---
+
+## Runbook — RDS unreachable, restore from snapshot
+
+**Incident 2026-09-02 → 2026-09-11. Nine days down. Found by a login screen.**
+
+### Timeline
+
+    Sep 1  10:06   last automated backup
+    Sep 2  01:58   RDS cannot reach its KMS key. Transient — the key was
+                   never disabled; it is the AWS-managed aws/rds key and
+                   a customer cannot disable it.
+    Sep 2  03:54   RDS stops the instance itself
+                   -> inaccessible-encryption-credentials-RECOVERABLE
+    Sep 9  03:48   the 7-day recoverable window expires
+    Sep 9  03:54   -> inaccessible-encryption-credentials (terminal).
+                   RDS takes a final snapshot on the way out.
+    Sep 11 11:00   noticed, because sign-in showed an error
+
+Those seven days are the whole story. Restoring KMS access inside that
+window is a restart. After it, the instance cannot be recovered at all —
+only restored to a NEW one. **RDS emails about this; nothing in this repo
+watches for it.**
+
+### How it presents
+
+`lifespan` in `api/main.py` opens both pools before the app serves anything.
+With the database gone it raises, uvicorn exits, ECS restarts the task, the
+target never turns healthy, and the ALB answers every `/api/*` path with its
+own 503 — an **nginx-style HTML page, not FastAPI JSON**. That content-type
+is how you tell "no healthy target" from `_pool()`'s own 503:
+
+    curl -sS -m 30 -o /dev/null -w '%{http_code} %{content_type}\n' \
+      https://www.accorddental.io/api/health
+
+    503 text/html          -> ALB has no healthy target (this incident)
+    503 application/json   -> task is up, auth.os_pool was never wired
+    200 text/html          -> /api is not routed; CloudFront SPA fallback
+
+The service crash-looped every ~13 minutes for at least 14 hours and
+nothing alarmed.
+
+### Restore
+
+Restore under a TEMPORARY name, verify, then take the original name back.
+The endpoint hostname derives from the instance identifier, so the rename
+reproduces the exact host already in `.env`, in this file, and in both
+task-definition DSNs — nothing downstream needs editing.
+
+    aws rds describe-db-snapshots --db-instance-identifier dental-postgres \
+      --profile dental --region us-east-1 \
+      --query 'sort_by(DBSnapshots,&SnapshotCreateTime)[].{id:DBSnapshotIdentifier,type:SnapshotType,created:SnapshotCreateTime}'
+
+    aws rds restore-db-instance-from-db-snapshot \
+      --db-instance-identifier dental-postgres-restore \
+      --db-snapshot-identifier "rds-final:dental-postgres-db-XXXX" \
+      --db-instance-class db.t3.micro \
+      --db-subnet-group-name dental-db-subnets-public \
+      --vpc-security-group-ids sg-0f1ee9f88feb1b11f \
+      --publicly-accessible --no-multi-az \
+      --profile dental --region us-east-1
+
+Verify against the counts at the top of this file, with `.env` pointed at the
+temporary endpoint:
+
+    cp .env .env.bak
+    sed -i 's/dental-postgres\.c2feioes4hil/dental-postgres-restore.c2feioes4hil/g' .env
+    python scripts/test_connection.py
+
+Then swap the name in and put everything back:
+
+    aws rds delete-db-instance --db-instance-identifier dental-postgres \
+      --skip-final-snapshot --profile dental --region us-east-1
+    # wait for DBInstanceNotFound, then:
+    aws rds modify-db-instance --db-instance-identifier dental-postgres-restore \
+      --new-db-instance-identifier dental-postgres --apply-immediately \
+      --profile dental --region us-east-1
+    mv .env.bak .env
+
+Put the stack's tag back, or drift reports MODIFIED on `/Tags`:
+
+    aws rds add-tags-to-resource \
+      --resource-name arn:aws:rds:us-east-1:740104998309:db:dental-postgres \
+      --tags Key=Name,Value=dental-postgres --profile dental --region us-east-1
+
+Force the API onto a fresh task and confirm:
+
+    aws ecs update-service --cluster dental-cluster --service dental-os-service \
+      --force-new-deployment --profile dental --region us-east-1
+    curl -sS -m 30 https://www.accorddental.io/api/health
+
+### Prevention — NOT done as of 2026-09-11
+
+  · **`BackupRetentionPeriod` is 1, and not by oversight.**
+    `dental-simulator/infra/cloudformation/03-rds.yaml` records that this
+    account's plan rejected 7 outright — *"backup retention period exceeds
+    the maximum available to free tier customers"* — so the stack was left
+    at 1 to make it create at all. The parameter is `BackupRetentionDays`
+    and the template says to raise it with
+    `--parameter-overrides BackupRetentionDays=7` **after upgrading the
+    plan**. The prerequisite is therefore the ACCOUNT PLAN, not a template
+    edit — do not just change the default, the deploy will fail.
+    Until the plan moves, one day of PITR is the standing exposure and a
+    periodic MANUAL snapshot is the cheap mitigation: manual snapshots
+    never expire, which is the only reason this incident was survivable.
+  · **`03-rds.yaml` sets `DeletionPolicy: Delete` and
+    `UpdateReplacePolicy: Delete`** on the instance. A stack delete, or any
+    update CloudFormation decides needs replacement, destroys the database
+    with no final snapshot. That was a deliberate dev-environment choice and
+    it is recorded as such; after 2026-09-02 it is worth revisiting, and
+    `Snapshot` costs nothing until the day it fires.
+  · **Alarms: `scripts/create_alarms.sh`** creates
+    `dental-os-no-healthy-host` (HealthyHostCount < 1, missing data treated
+    as breaching) and `dental-os-5xx`. **NOT YET RUN**, and silent until an
+    SNS topic is passed — see the header of that file. That alarm is the
+    difference between nine days and ten minutes.
+
+Both template items live in **dental-simulator**, which RULE 15 makes
+read-only from this repo. They are written down here rather than changed
+there — which is exactly the seam that produced the two IAM drifts above.
 
 ---
 
